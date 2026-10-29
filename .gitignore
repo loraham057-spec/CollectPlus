@@ -3,3 +3,7 @@ __pycache__/
 *.py[cod]
 data/*.db
 .DS_Store
+node_modules/
+android-wrapper/node_modules/
+android-wrapper/www/
+android-wrapper/android/

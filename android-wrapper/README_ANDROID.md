@@ -1,6 +1,6 @@
 # Préparer l'APK Android CollectPlus
 
-Ce dossier contient le conteneur natif Android basé sur Capacitor. Il prépare les fichiers nécessaires, mais **n'est pas un APK déjà compilé**.
+Ce dossier contient le conteneur natif Android basé sur Capacitor. Le fichier `app-debug.apk` n'est pas précompilé dans l'archive. Pour éviter une installation locale complète d'Android Studio, le dépôt inclut le workflow GitHub Actions `.github/workflows/build-apk.yml` qui construit et publie l'APK comme artefact téléchargeable.
 
 ## Prérequis
 

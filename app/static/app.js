@@ -114,7 +114,20 @@
       writeLS(LS.forms, state.forms);
     } catch (error) {
       state.forms = readLS(LS.forms, []);
-      if (!state.forms.length) toast('Impossible de charger les enquêtes', 'error', 'Lancez le serveur puis actualisez la page.');
+      if (!state.forms.length) {
+        // APK/PWA fallback: include the MAPEPI starter form so first launch works offline.
+        try {
+          const response = await fetch('/static/default-forms.json', {cache: 'no-store'});
+          if (response.ok) {
+            const bundledForms = await response.json();
+            state.forms = Array.isArray(bundledForms) ? bundledForms : [];
+            if (state.forms.length) writeLS(LS.forms, state.forms);
+          }
+        } catch (fallbackError) {
+          console.warn('Les formulaires intégrés ne sont pas disponibles.', fallbackError);
+        }
+      }
+      if (!state.forms.length) toast('Impossible de charger les enquêtes', 'error', 'Vérifiez le serveur ou rechargez la page.');
     }
     renderForms();
     renderCollectPicker();
@@ -318,7 +331,7 @@
       const validation = validateSurveyForm(surveyForm, form);
       if (validation) { toast(validation, 'error'); return; }
       const data = collectAnswers(surveyForm, form);
-      const record = {id: uuid(), form_id: form.id, data, submitted_at: new Date().toISOString()};
+      const record = {id: uuid(), form_id: form.id, form_key: form.key || null, data, submitted_at: new Date().toISOString()};
       await saveSubmission(record);
       surveyForm.reset();
       updateFormProgress();

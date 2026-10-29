@@ -40,7 +40,7 @@ Puis ouvrez http://127.0.0.1:8000. Le volume `./data` conserve la base quand le 
 
 ## Limites importantes de cette version
 
-Cette livraison est un **MVP local prêt à lancer**, pas encore un déploiement de production ni un APK Android compilé. Elle n’intègre pas encore les comptes utilisateurs, les rôles, les permissions multi-organisation, le chiffrement de bout en bout, le contrôle d’accès côté serveur, ni une infrastructure de sauvegardes automatisées. Les préférences visuelles sont stockées dans le navigateur. La synchronisation hors ligne utilise `localStorage` et non une base mobile chiffrée.
+Cette livraison est un **MVP local prêt à lancer**, avec un workflow GitHub Actions permettant de compiler automatiquement un APK Android de test. L'APK n'est pas précompilé dans l'archive : il est produit par GitHub Actions après publication du code et lancement du workflow. Elle n’intègre pas encore les comptes utilisateurs, les rôles, les permissions multi-organisation, le chiffrement de bout en bout, le contrôle d’accès côté serveur, ni une infrastructure de sauvegardes automatisées. Les préférences visuelles sont stockées dans le navigateur. La synchronisation hors ligne utilise `localStorage` et non une base mobile chiffrée.
 
 **Ne publiez pas ce serveur directement sur Internet et n’y entrez pas de données personnelles ou médicales identifiantes en production avant d’ajouter une authentification forte, des droits d’accès, HTTPS, des sauvegardes testées et les protections de confidentialité requises.** Utilisez d’abord les données de test.
 
@@ -59,7 +59,16 @@ La documentation interactive de l’API est accessible sur **http://127.0.0.1:80
 
 ## Préparation Android (APK)
 
-Le dossier `android-wrapper/` contient un projet Capacitor et un script Windows pour préparer le projet Android. Pour construire un APK, il faut installer Node.js 22+, Android Studio et un SDK Android. Les dépendances requises pour Capacitor 8 et les étapes de compilation sont détaillées dans `android-wrapper/README_ANDROID.md`. Aucun APK compilé n’est fourni dans cette archive ; la version web locale est celle qui est directement prête à démarrer.
+Le dossier `android-wrapper/` contient le conteneur Capacitor. Le formulaire MAPEPI est inclus comme formulaire de démarrage afin que l'écran de collecte soit disponible même si le serveur n'est pas accessible au premier lancement. Les soumissions faites hors ligne restent stockées sur l'appareil et peuvent être synchronisées vers une API CollectPlus compatible après configuration de son adresse dans les paramètres.
+
+**Compiler un APK via GitHub Actions :**
+1. Publiez tout le contenu de ce dossier dans la branche `main` d'un dépôt GitHub.
+2. Ouvrez l'onglet **Actions** du dépôt.
+3. Choisissez **Build CollectPlus APK**, puis **Run workflow** sur la branche `main`.
+4. Une fois le workflow terminé avec une coche verte, ouvrez son exécution et téléchargez l'artefact **CollectPlus-Android-APK** dans la section **Artifacts**.
+5. Décompressez l'artefact pour récupérer `app-debug.apk`, puis transférez-le sur un téléphone Android de test.
+
+Le workflow se déclenche aussi automatiquement lorsqu'un changement pertinent est poussé dans `main`. L'APK généré est un APK debug de test, pas un paquet signé pour une publication de production. Pour la compilation locale avec Android Studio, voir `android-wrapper/README_ANDROID.md`.
 
 ## Structure du projet
 
@@ -73,7 +82,15 @@ CollectPlus_MVP/
 │       ├── app.js
 │       ├── manifest.webmanifest
 │       ├── service-worker.js
+│       ├── default-forms.json
 │       └── icon.svg
+├── android-wrapper/
+│   ├── package.json
+│   ├── capacitor.config.ts
+│   └── build_android_windows.bat
+├── .github/workflows/
+│   ├── collectplus-ci.yml
+│   └── build-apk.yml
 ├── data/
 ├── run_windows.bat
 ├── run_network_windows.bat
@@ -83,3 +100,21 @@ CollectPlus_MVP/
 ├── requirements.txt
 └── sample_form.json
 ```
+
+## Vérification automatique avec GitHub Actions
+
+Le fichier `.github/workflows/collectplus-ci.yml` vérifie automatiquement le projet à chaque push ou pull request vers `main` et peut être lancé manuellement depuis l'onglet **Actions**. Il installe les dépendances, vérifie la syntaxe, démarre brièvement le serveur pour contrôler les routes essentielles, puis construit l'image Docker.
+
+**Important :** ce workflow vérifie et construit le projet dans un environnement temporaire GitHub. Il ne publie pas l'application sur une adresse Internet permanente. Pour rendre CollectPlus accessible au public, il faut ensuite choisir et configurer un hébergeur compatible avec FastAPI et prévoir un stockage persistant pour la base de données.
+
+## Compiler l'APK automatiquement avec GitHub Actions
+
+Le workflow `.github/workflows/build-apk.yml` compile l'application Android et publie `app-debug.apk` comme artefact téléchargeable.
+
+1. Envoyez tout le contenu de ce dossier à la racine du dépôt GitHub (le dossier `.github/workflows/` doit également être présent).
+2. Ouvrez le dépôt GitHub, puis **Actions**.
+3. Sélectionnez **Build CollectPlus APK** dans la liste des workflows.
+4. Cliquez sur **Run workflow**, sélectionnez la branche `main`, puis confirmez avec **Run workflow**. Le workflow peut aussi démarrer automatiquement après un push sur `main` lorsque des fichiers concernés sont modifiés.
+5. Attendez que l'exécution soit terminée avec une coche verte. Ouvrez l'exécution, puis téléchargez l'artefact **CollectPlus-Android-APK** dans la section **Artifacts**. Décompressez l'archive téléchargée pour récupérer `app-debug.apk`.
+
+Cette compilation produit un APK **debug destiné aux tests**, non signé pour une distribution de production. Le paquet Android contient l'interface mobile ; l'API Python et sa base de données doivent toujours fonctionner sur un serveur accessible pour les fonctions de synchronisation.

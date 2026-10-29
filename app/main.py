@@ -187,7 +187,8 @@ class FormCreate(BaseModel):
 
 class SubmissionCreate(BaseModel):
     id: str | None = None
-    form_id: int
+    form_id: int | None = None
+    form_key: str | None = None
     data: dict[str, Any]
     submitted_at: str | None = None
 
@@ -387,7 +388,26 @@ async def import_form(file: UploadFile = File(...)) -> dict[str, Any]:
 
 @app.post("/api/submissions")
 def create_submission(submission: SubmissionCreate) -> dict[str, Any]:
-    get_form_or_404(submission.form_id)
+    # Prefer the stable form key when provided. This lets a submission captured
+    # on a freshly installed offline APK match the server form even if its DB id differs.
+    resolved_form_id = submission.form_id
+    if submission.form_key:
+        with db_conn() as conn:
+            rows = conn.execute("SELECT id, schema_json FROM forms").fetchall()
+        resolved_form_id = None
+        for row in rows:
+            try:
+                schema = json.loads(row["schema_json"])
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if schema.get("key") == submission.form_key:
+                resolved_form_id = int(row["id"])
+                break
+        if resolved_form_id is None:
+            raise HTTPException(status_code=404, detail="Le formulaire associé à cette soumission n’existe pas sur le serveur.")
+    if resolved_form_id is None:
+        raise HTTPException(status_code=422, detail="form_id ou form_key est requis.")
+    get_form_or_404(resolved_form_id)
     sub_id = submission.id or str(uuid.uuid4())
     submitted_at = submission.submitted_at or utc_now()
     payload = submission.data
@@ -395,7 +415,7 @@ def create_submission(submission: SubmissionCreate) -> dict[str, Any]:
         try:
             conn.execute(
                 "INSERT INTO submissions(id, form_id, payload_json, submitted_at) VALUES (?, ?, ?, ?)",
-                (sub_id, submission.form_id, json.dumps(payload, ensure_ascii=False), submitted_at),
+                (sub_id, resolved_form_id, json.dumps(payload, ensure_ascii=False), submitted_at),
             )
         except sqlite3.IntegrityError:
             # Retry-safe offline synchronization: an already uploaded UUID is an acknowledgement.
