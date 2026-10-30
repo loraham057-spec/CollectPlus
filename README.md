@@ -118,3 +118,16 @@ Le workflow `.github/workflows/build-apk.yml` compile l'application Android et p
 5. Attendez que l'exécution soit terminée avec une coche verte. Ouvrez l'exécution, puis téléchargez l'artefact **CollectPlus-Android-APK** dans la section **Artifacts**. Décompressez l'archive téléchargée pour récupérer `app-debug.apk`.
 
 Cette compilation produit un APK **debug destiné aux tests**, non signé pour une distribution de production. Le paquet Android contient l'interface mobile ; l'API Python et sa base de données doivent toujours fonctionner sur un serveur accessible pour les fonctions de synchronisation.
+
+
+## Version 0.2.0 — améliorations
+
+- Rafraîchissement visuel : palette bleu-vert, contrastes renforcés, cartes plus lisibles, états de survol et meilleure adaptation mobile.
+- Accessibilité : indicateurs de focus clavier et prise en compte de la préférence de réduction des animations.
+- Sécurité des imports : limite de 10 Mo sur les fichiers de formulaires importés.
+- Sécurité des exports tableur : neutralisation des valeurs susceptibles d'être interprétées comme des formules Excel/LibreOffice dans les exports CSV et XLSX.
+- CORS : suppression de l'autorisation universelle `*`. Par défaut, l'interface et l'API fonctionnent en même origine. Si l'API est hébergée sur un domaine distinct, définissez `COLLECTPLUS_CORS_ORIGINS` avec une liste explicite de domaines autorisés, séparés par des virgules.
+
+### Précautions avant une utilisation réelle
+
+Cette version reste un socle fonctionnel et ne fournit pas encore de système complet d'authentification, de rôles/permissions, de journal d'audit ni de chiffrement applicatif des données. Ne l'exposez pas publiquement avec des données personnelles ou de santé identifiantes avant d'avoir ajouté ces contrôles, activé HTTPS, configuré des sauvegardes testées et limité l'accès au serveur. En production, utilisez un volume persistant pour `data/collectplus.db`.

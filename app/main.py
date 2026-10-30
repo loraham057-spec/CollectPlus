@@ -26,10 +26,19 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(
     title="CollectPlus",
-    version="0.1.0",
+    version="0.2.0",
     description="Plateforme de collecte mobile et de visualisation des enquêtes.",
 )
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
+# Same-origin is preferred. Add explicit trusted origins only when the API is hosted separately.
+cors_origins = [origin.strip() for origin in os.getenv("COLLECTPLUS_CORS_ORIGINS", "").split(",") if origin.strip()]
+if cors_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=cors_origins,
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+        allow_headers=["Content-Type", "Accept"],
+    )
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
@@ -364,6 +373,8 @@ def parse_xlsform(content: bytes, filename: str) -> dict[str, Any]:
 async def import_form(file: UploadFile = File(...)) -> dict[str, Any]:
     filename = file.filename or "formulaire"
     content = await file.read()
+    if len(content) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Fichier trop volumineux. La taille maximale autorisée est de 10 Mo.")
     suffix = Path(filename).suffix.lower()
     if suffix == ".json":
         try:
@@ -474,21 +485,29 @@ def dashboard() -> dict[str, Any]:
     }
 
 
+def _spreadsheet_safe(value: Any) -> str:
+    """Prevent spreadsheet formula execution in exported user-provided text."""
+    text = str(value if value is not None else "")
+    if text.lstrip().startswith(("=", "+", "-", "@", "\\t", "\\r")):
+        return "'" + text
+    return text
+
+
 def flatten_records(rows: list[dict[str, Any]]) -> tuple[list[str], list[list[str]]]:
     all_keys: list[str] = []
     for row in rows:
         for key in row["data"].keys():
             if key not in all_keys:
                 all_keys.append(key)
-    headers = ["id", "form_id", "form_title", "submitted_at"] + all_keys
+    headers = [_spreadsheet_safe(v) for v in (["id", "form_id", "form_title", "submitted_at"] + all_keys)]
     output = []
     for row in rows:
-        values = [row["id"], row["form_id"], row["form_title"], row["submitted_at"]]
+        values = [_spreadsheet_safe(v) for v in (row["id"], row["form_id"], row["form_title"], row["submitted_at"])]
         for key in all_keys:
             value = row["data"].get(key, "")
             if isinstance(value, (list, dict)):
                 value = json.dumps(value, ensure_ascii=False)
-            values.append("" if value is None else str(value))
+            values.append(_spreadsheet_safe(value))
         output.append(values)
     return headers, output
 
