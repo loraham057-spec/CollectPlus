@@ -4,52 +4,10 @@
 @media(max-width:680px){.sidebar{transform:translateX(-105%);transition:transform .22s ease;box-shadow:15px 0 40px #1b483311;width:260px}.sidebar.mobile-open{transform:translateX(0)}.main-area{margin-left:0;width:100%}.topbar{height:58px;padding:0 15px;gap:10px}.mobile-menu{display:block}.breadcrumb{margin-right:auto;gap:7px}.breadcrumb>span:first-child{display:none}.crumb-separator{display:none}.topbar-actions{gap:8px}.connection-pill{padding:0 7px;font-size:0;gap:0;width:26px;height:26px;justify-content:center}.connection-pill .status-dot{width:7px;height:7px}.avatar{width:27px;height:27px}.content-wrap{padding:22px 14px 28px}.page-heading{align-items:flex-start;flex-direction:column;gap:15px;margin-bottom:20px}.hero-heading{margin-bottom:19px}.page-heading h1{font-size:25px}.heading-actions{width:100%}.heading-actions .button{flex:1}.welcome-banner{padding:23px 22px;min-height:213px}.welcome-copy{max-width:100%}.welcome-banner h2{font-size:20px;max-width:290px}.welcome-banner p{max-width:300px}.banner-art{opacity:.19;right:-16%;width:62%}.section-header{align-items:start;gap:12px}.subtle-label{display:none}.metric-grid{gap:9px}.metric-card{padding:13px;border-radius:12px}.metric-value{font-size:25px}.metric-label{line-height:1.4;min-height:28px}.metric-foot{font-size:8px;line-height:1.4}.metric-tag{font-size:7px}.metric-icon{width:29px;height:29px}.chart-panel{padding:16px}.status-chart{gap:7px;margin-top:20px}.status-stat .status-number{font-size:23px}.status-stat .status-label{font-size:9px}.chart-legend{gap:9px;font-size:8px}.recent-panel .panel-heading{padding:0 15px 13px}.recent-panel .panel-heading .link-button{max-width:120px;text-align:right;line-height:1.4}.data-table th{padding:10px 12px}.data-table td{padding:12px}.app-footer{padding:13px 15px 18px;flex-direction:column;gap:4px}.filter-row,.submission-controls{align-items:stretch;flex-wrap:wrap}.search-box{flex-basis:100%;max-width:none}.filter-hint{margin-left:0}.forms-grid{grid-template-columns:1fr}.survey-card{min-height:190px}.collect-layout{grid-template-columns:1fr}.collect-picker{position:static}.collect-picker-list{display:flex;overflow-x:auto;padding-bottom:3px}.picker-item{min-width:190px;width:auto}.collect-tip{display:none}.collect-form-heading{padding:17px}.collect-form-heading h2{font-size:16px}.collect-form-body{padding:19px 16px}.form-section-title{font-size:12px}.question-grid{gap:14px}.collect-form-footer{padding:14px 16px;align-items:flex-start;flex-direction:column}.form-footer-buttons{width:100%}.form-footer-buttons .button{flex:1}.submission-controls .select-control{max-width:none;flex:1}.report-cards{grid-template-columns:1fr}.report-card{padding:17px;min-height:190px}.report-summary-stats{grid-template-columns:1fr}.settings-panel{padding:17px}.builder-fields.two-col{grid-template-columns:1fr}.wide-field{grid-column:auto}.builder-meta,.question-builder{padding:16px}.builder-question-grid{grid-template-columns:1fr}.builder-question-grid .wide-builder-field{grid-column:auto}.builder-question-top{align-items:flex-start}.modal-backdrop{padding:9px}.modal-card{padding:16px;max-height:90vh}.modal-answer-grid{grid-template-columns:1fr}.toast-region{right:10px;bottom:10px;left:10px}.toast{max-width:none}.welcome-kicker{font-size:8px}}
 @media print{body{background:#fff}.sidebar,.topbar,.app-footer,.heading-actions,.filter-row,.submission-controls,.format-hint,.prototype-note,.button,.icon-button{display:none!important}.main-area{margin:0;width:100%}.content-wrap{padding:0;max-width:none}.view{display:none!important}#view-dashboard{display:block!important}.welcome-banner{min-height:140px!important;print-color-adjust:exact;-webkit-print-color-adjust:exact}.metric-card,.panel{box-shadow:none;break-inside:avoid}.dashboard-grid{grid-template-columns:1fr 1fr}.metric-grid{grid-template-columns:repeat(4,1fr)}.page-heading h1{font-size:24px}.chart-panel{break-inside:avoid}.status-badge,.metric-icon{print-color-adjust:exact;-webkit-print-color-adjust:exact}}
 
-
-/* CollectPlus UI refinement — cohérence visuelle, lisibilité et accessibilité */
-:root{
-  --accent:#147b70;
-  --accent-dark:#0d5e57;
-  --accent-soft:#e6f5f1;
-  --bg:#f3f6fa;
-  --text:#172f3d;
-  --muted:#71838e;
-  --line:#e3eaf0;
-  --shadow:0 10px 30px rgba(25,54,75,.065);
-  --radius:16px;
-}
-body{background:linear-gradient(135deg,#f5f8fb 0%,#f1f6f5 55%,#f7f8fc 100%);color:var(--text)}
-.sidebar{box-shadow:5px 0 24px rgba(20,48,66,.025)}
-.brand-mark{color:#147b70}
-.nav-item{min-height:44px}
-.nav-item.active{box-shadow:inset 3px 0 0 var(--accent)}
-.topbar{border-bottom-color:#e7edf2}
-.page-heading h1{color:#17384a;letter-spacing:-.9px}
-.metric-card,.panel,.survey-card,.settings-panel,.collect-form-card,.report-card{
-  border-color:#e4ebf0;box-shadow:0 8px 24px rgba(24,52,73,.045);
-  transition:box-shadow .18s ease,transform .18s ease,border-color .18s ease
-}
-.metric-card:hover,.survey-card:hover,.report-card:hover{
-  transform:translateY(-2px);box-shadow:0 13px 30px rgba(24,52,73,.085);border-color:#cfe2dc
-}
-.button{min-height:38px}
-.button-primary{background:linear-gradient(135deg,#147b70,#159887);box-shadow:0 5px 13px rgba(20,123,112,.18)}
-.button-primary:hover{background:linear-gradient(135deg,#0d655d,#117d73)}
-.welcome-banner{background:linear-gradient(112deg,#123e55 0%,#126d70 56%,#20a18a 100%);box-shadow:0 14px 32px rgba(20,91,91,.13)}
-.metric-icon.mint{background:#e2f5ed;color:#168567}
-.metric-icon.violet{background:#f0edff;color:#765cc5}
-.metric-icon.amber{background:#fff3df;color:#bd7a1e}
-.metric-icon.blue{background:#e7f2ff;color:#397fb9}
-.data-table thead th{background:#f5f8fa;color:#637782}
-.data-table tbody tr:hover{background:#f5faf8}
-input,select,textarea{border-color:#dce6e9}
-input:focus,select:focus,textarea:focus{border-color:#66b6a5;box-shadow:0 0 0 3px rgba(20,123,112,.10)}
-.status-badge{font-weight:750}
-.app-footer{color:#8b9aa2}
-@media(max-width:680px){
-  .metric-card:hover,.survey-card:hover,.report-card:hover{transform:none}
-  .welcome-banner{background:linear-gradient(120deg,#123e55,#147d78)}
-  .page-heading h1{letter-spacing:-.6px}
-}
-@media(prefers-reduced-motion:reduce){
-  *,*::before,*::after{scroll-behavior:auto!important;animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}
-}
+/* CollectPlus 0.3 — visual refresh */
+:root{--accent:#078b9a;--accent-dark:#086b78;--accent-soft:#e3f5f5;--bg:#f2f6fb;--surface:#fff;--text:#142b49;--muted:#647894;--line:#e2eaf2;--sidebar:#102d4b;--shadow:0 8px 26px rgba(20,43,73,.07);--radius:15px}
+body{font-family:Inter,"Segoe UI",Roboto,Arial,sans-serif;color:#142b49;background:#f2f6fb}
+.sidebar{background:linear-gradient(180deg,#102d4b 0%,#0c2742 100%);border-right:0;color:#f4f8fc;box-shadow:5px 0 24px rgba(15,39,65,.08)}
+.brand-name,.brand-subtitle,.workspace-label,.nav-item,.sidebar-footer,.offline-card,.offline-card p{color:#f4f8fc}.brand-mark{color:#27c4bd}.workspace-label{opacity:.62}.nav-item{border-radius:10px}.nav-item:hover,.nav-item.active{background:linear-gradient(90deg,rgba(0,164,183,.32),rgba(0,164,183,.12));color:#fff}.nav-icon{color:#a9d8e2}.offline-card{background:rgba(255,255,255,.09);border:1px solid rgba(255,255,255,.12);border-radius:13px}.sidebar-footer{opacity:.78}.main-area{background:#f2f6fb}.topbar{background:rgba(255,255,255,.94);border-bottom:1px solid #e3eaf2;backdrop-filter:blur(12px)}.content-wrap{max-width:1600px}.page-heading h1{color:#142b49;letter-spacing:-.7px}.eyebrow{color:#078b9a;letter-spacing:1.4px}.button-primary{background:linear-gradient(135deg,#0796a4,#087b91);box-shadow:0 5px 13px rgba(7,139,154,.18)}.button-primary:hover{background:#086b78}.metric-card,.panel,.report-card,.settings-panel,.builder-preview{border:1px solid #e5ecf4;box-shadow:var(--shadow);border-radius:15px}.metric-card{position:relative;overflow:hidden}.metric-card:after{content:"";position:absolute;right:-23px;top:-28px;width:90px;height:90px;border-radius:50%;background:rgba(8,139,154,.045)}.metric-icon.mint{background:#d9f6eb;color:#0ba879}.metric-icon.violet{background:#e9e3ff;color:#7954d6}.metric-icon.amber{background:#fff0d8;color:#e58a12}.metric-icon.blue{background:#dcecff;color:#2879df}.panel-heading h2,.section-header h2{color:#142b49}.data-table thead th{background:#f4f7fb;color:#526780}.data-table tbody tr:hover{background:#f5fafc}.status-badge,.badge{border-radius:20px}.welcome-banner{border-radius:18px;background:linear-gradient(112deg,#0d3657 0%,#087f91 72%,#11a99c 100%);box-shadow:0 12px 30px rgba(9,76,103,.16)}.welcome-banner h2,.welcome-banner p,.welcome-kicker{color:#fff}.welcome-link{color:#fff}.dashboard-insight-grid{display:grid;grid-template-columns:1fr 1.15fr;gap:18px;margin:18px 0}.trend-panel,.geo-panel{min-width:0}.trend-summary{display:flex;align-items:baseline;gap:10px;margin:10px 0 2px}.trend-summary strong{font-size:23px;color:#142b49}.trend-summary span,.visual-note,.trend-axis,.geo-footer{font-size:11px;color:#73849a}.trend-bars{height:145px;display:flex;align-items:end;gap:clamp(5px,1.4vw,13px);padding:12px 8px 0;border-bottom:1px solid #dfe8f0;background:repeating-linear-gradient(to bottom,transparent 0,transparent 35px,#edf2f7 36px)}.trend-bars i{display:block;flex:1;min-width:7px;border-radius:6px 6px 0 0;background:linear-gradient(180deg,#19b8a5,#078b9a);box-shadow:0 3px 8px rgba(7,139,154,.12)}.trend-axis{display:flex;justify-content:space-between;padding:7px 4px}.visual-note{margin:8px 0 0}.geo-preview{position:relative;background:#eaf3f5;border-radius:12px;overflow:hidden}.geo-preview svg{display:block;width:100%;height:220px}.geo-legend{display:flex;gap:18px;flex-wrap:wrap;padding:8px 12px;background:#fff;border-top:1px solid #e4edf1;font-size:11px;color:#526780}.geo-legend span{display:flex;align-items:center;gap:6px}.geo-dot{width:9px;height:9px;border-radius:50%;display:inline-block}.teal-dot{background:#087f8c}.amber-dot{background:#f59e0b}.geo-footer{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 2px 0}.geo-footer .link-button{font-size:11px}.app-footer{color:#8190a3}.search-box,.select-control,input,textarea{border-color:#dce6ef}.button-secondary{border-color:#d7e3ec;color:#31506e;background:#fff}.button-secondary:hover{background:#f2f8fa;border-color:#9fcbd0}
+@media(max-width:900px){.dashboard-insight-grid{grid-template-columns:1fr}.geo-preview svg{height:190px}}
+@media(max-width:600px){.dashboard-insight-grid{gap:12px}.geo-footer{align-items:flex-start;flex-direction:column}.trend-bars{height:115px}.geo-preview svg{height:165px}}

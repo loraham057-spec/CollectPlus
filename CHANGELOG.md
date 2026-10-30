@@ -1,16 +1,11 @@
-# Journal des modifications
+# Historique des versions
 
-## 0.2.0 — 30 octobre 2026
-- Harmonisation de la palette bleu-vert et amélioration de la hiérarchie visuelle.
-- Amélioration des états interactifs, de la lisibilité des tableaux et de l'affichage mobile.
-- Respect de la préférence système de réduction des animations.
-- Limitation des fichiers de formulaires importés à 10 Mo.
-- Protection des exports CSV/XLSX contre l'injection de formules tableur.
-- CORS désormais désactivé par défaut en mode même origine et configurable par liste blanche.
-- Invalidation du cache PWA pour forcer le chargement des nouveaux fichiers statiques.
+## 0.3.0 — refonte visuelle
+- Nouvelle identité visuelle bleu nuit, turquoise et fond clair.
+- Sidebar sombre et composants harmonisés.
+- Nouvelle zone Activité de collecte sur le tableau de bord.
+- Prévisualisation cartographique schématique et légende.
+- Mise à jour du cache PWA pour forcer le chargement des nouveaux styles.
+- Version API et wrapper Android alignées sur 0.3.0.
 
-## Limites connues à traiter avant production
-- Authentification et gestion des rôles/permissions.
-- Journal d'audit et contrôle d'accès aux données.
-- Stratégie de sauvegarde/restauration testée et chiffrement adapté au contexte.
-- Validation métier approfondie des formulaires importés et des soumissions.
+**Note cartographique :** la carte intégrée à cette livraison est une illustration schématique, pas une carte géoréférencée. Les points et limites administratives réels nécessitent des coordonnées GPS et des couches GeoJSON validées.
