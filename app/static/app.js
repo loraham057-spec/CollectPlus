@@ -8,10 +8,10 @@
     settings: 'collectplus_settings_v1'
   };
   const state = {
-    forms: [], submissions: [], dashboard: null, map: null, mapMarkers: [], view: 'dashboard', selectedFormId: null,
-    builderQuestions: [], builderMode: 'create', selectedSubmissionForm: 'all', builderShortManual: false
+    forms: [], submissions: [], dashboard: null, view: 'dashboard', selectedFormId: null,
+    builderQuestions: [], builderMode: 'create', selectedSubmissionForm: 'all', builderShortManual: false, dashboardMap: null, fullMap: null, mapMarkers: [], fullMapMarkers: []
   };
-  const pageLabels = {dashboard:'Vue d’ensemble', forms:'Mes enquêtes', collect:'Nouvelle collecte', submissions:'Soumissions', reports:'Rapports & exports', settings:'Paramètres', builder:'Créer une enquête'};
+  const pageLabels = {dashboard:'Vue d’ensemble', forms:'Mes enquêtes', collect:'Nouvelle collecte', submissions:'Soumissions', reports:'Rapports & exports', sharing:'Partage public', map:'Cartographie', settings:'Paramètres', builder:'Créer une enquête'};
 
   function readLS(key, fallback) {
     try { const value = localStorage.getItem(key); return value ? JSON.parse(value) : fallback; }
@@ -132,42 +132,88 @@
     renderForms();
     renderCollectPicker();
     populateSubmissionFilter();
-    populateDashboardFormFilter();
-  }
-  function dashboardQuery() {
-    const period = $('#dashboardPeriod')?.value || '30';
-    const form = $('#dashboardForm')?.value || 'all';
-    const province = $('#dashboardProvince')?.value || 'all';
-    const params = new URLSearchParams();
-    if (period !== 'all') { const d = new Date(); d.setDate(d.getDate() - Number(period)); params.set('start_date', d.toISOString().slice(0,10)); }
-    if (form !== 'all') params.set('form_id', form);
-    if (province !== 'all') params.set('province', province);
-    return `/api/dashboard${params.toString() ? `?${params}` : ''}`;
-  }
-  function populateDashboardFormFilter() {
-    const select = $('#dashboardForm'); if (!select) return;
-    const selected = select.value || 'all';
-    select.innerHTML = '<option value="all">Toutes les enquêtes</option>' + state.forms.map(f => `<option value="${f.id}">${escapeHtml(f.short_title || f.title)}</option>`).join('');
-    if ([...select.options].some(o => o.value === selected)) select.value = selected;
   }
   async function loadDashboard() {
     try {
-      state.dashboard = await api(dashboardQuery());
+      const period = $('#dashboardPeriod')?.value || '30';
+      const form = $('#dashboardForm')?.value || 'all';
+      const province = $('#dashboardProvince')?.value || 'all';
+      const params = new URLSearchParams({period, province});
+      if (form !== 'all') params.set('form_id', form);
+      state.dashboard = await api(`/api/dashboard?${params.toString()}`);
       renderDashboard(state.dashboard);
+      populateDashboardFilters(state.dashboard);
       $('#lastRefreshLabel').textContent = `Actualisé à ${new Intl.DateTimeFormat('fr-FR', {hour:'2-digit', minute:'2-digit'}).format(new Date())}`;
     } catch {
       const cached = readLS(LS.submissions, []);
       const forms = state.forms;
-      state.dashboard = {
-        form_count: forms.length, submission_count: cached.length,
-        status_counts: {'Ouvert':0,'En cours':0,'Résolu':0}, disease_counts:{}, monthly:[], points:[],
-        by_form: forms.map(f => ({label:f.short_title || f.title, value:cached.filter(s => s.form_id === f.id).length})), recent: cached.slice(0,7)
-      };
+      state.dashboard = {form_count:forms.length, submission_count:cached.length,
+        status_counts:{'Ouvert':0,'En cours':0,'Résolu':0}, disease_counts:{},
+        by_form:forms.map(f=>({label:f.short_title||f.title,value:cached.filter(s=>s.form_id===f.id).length})), recent:cached.slice(0,7), points:[], daily_counts:[], provinces:[]};
       renderDashboard(state.dashboard);
       $('#lastRefreshLabel').textContent = 'Données en cache (mode hors ligne)';
     }
   }
-  async function loadSubmissions() {
+
+  function populateDashboardFilters(data) {
+    const formSelect=$('#dashboardForm'), mapFormSelect=$('#mapFormFilter'), provinceSelect=$('#dashboardProvince');
+    if(formSelect && formSelect.options.length<=1){
+      const opts=state.forms.map(f=>`<option value="${f.id}">${escapeHtml(f.short_title||f.title)}</option>`).join('');
+      formSelect.insertAdjacentHTML('beforeend',opts);
+      if(mapFormSelect) mapFormSelect.insertAdjacentHTML('beforeend',opts);
+      const shareSelect=$('#shareFormSelect');
+      if(shareSelect) shareSelect.innerHTML=state.forms.map(f=>`<option value="${f.id}">${escapeHtml(f.short_title||f.title)}</option>`).join('');
+    }
+    if(provinceSelect && data.provinces){
+      const current=provinceSelect.value||'all';
+      provinceSelect.innerHTML='<option value="all">Toutes les provinces</option>'+data.provinces.map(p=>`<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join('');
+      if([...provinceSelect.options].some(o=>o.value===current)) provinceSelect.value=current;
+    }
+    renderSharingForms();
+  }
+
+  function initMap(targetId, full=false) {
+    if(!window.L) return null;
+    const target=$(`#${targetId}`);
+    if(!target) return null;
+    if(target._leaflet_id) return full?state.fullMap:state.dashboardMap;
+    const map=L.map(targetId,{scrollWheelZoom:false}).setView([-4.3,21.8],4.4);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:18,attribution:'© OpenStreetMap'}).addTo(map);
+    if(full) state.fullMap=map; else state.dashboardMap=map;
+    return map;
+  }
+
+  function renderMapPoints(points, full=false) {
+    const map=initMap(full?'fullMap':'dashboardMap',full);
+    const markerArray=full?state.fullMapMarkers:state.mapMarkers;
+    if(!map) return;
+    markerArray.forEach(m=>map.removeLayer(m)); markerArray.length=0;
+    (points||[]).forEach(point=>{
+      const lat=Number(point.latitude),lon=Number(point.longitude);
+      if(!Number.isFinite(lat)||!Number.isFinite(lon)) return;
+      const marker=L.circleMarker([lat,lon],{radius:7,color:'#fff',weight:2,fillColor:'#0799a6',fillOpacity:.95}).addTo(map);
+      marker.bindPopup(`<strong>${escapeHtml(point.form_title||'Soumission')}</strong><br>${escapeHtml(point.province||'Province non renseignée')}<br>${escapeHtml(friendlyDate(point.submitted_at))}`);
+      markerArray.push(marker);
+    });
+    if(markerArray.length){
+      const bounds=L.featureGroup(markerArray).getBounds();
+      map.fitBounds(bounds.pad(.18),{maxZoom:12});
+    } else map.setView([-4.3,21.8],4.4);
+    if(full) $('#fullMapSummary').textContent=`${markerArray.length} point(s) GPS affiché(s)`;
+    else $('#mapPointCount').textContent=`${markerArray.length} point(s)`;
+    setTimeout(()=>map.invalidateSize(),100);
+  }
+
+  function renderTrend(daily) {
+    const host=$('#submissionTrend'); if(!host) return;
+    const items=(daily||[]).slice(-14);
+    if(!items.length){host.innerHTML='<div class="empty-cell">Aucune soumission sur la période sélectionnée.</div>';$('#trendSummary').textContent='';return;}
+    const max=Math.max(1,...items.map(x=>Number(x.value)||0));
+    host.innerHTML=items.map(item=>`<div class="trend-bar-wrap" title="${escapeHtml(item.date)} : ${item.value}"><div class="trend-bar" style="height:${Math.max(2,(Number(item.value)||0)/max*90)}%"></div><small>${escapeHtml(item.date.slice(5))}</small></div>`).join('');
+    const total=items.reduce((sum,x)=>sum+(Number(x.value)||0),0);
+    $('#trendSummary').textContent=`${total.toLocaleString('fr-FR')} soumission(s) sur ${items.length} jour(s) avec activité`;
+  }
+async function loadSubmissions() {
     try {
       state.submissions = await api('/api/submissions');
       writeLS(LS.submissions, state.submissions);
@@ -191,6 +237,8 @@
     $('#currentPageLabel').textContent = pageLabels[view] || 'CollectPlus';
     $('#sidebar').classList.remove('mobile-open');
     if (view === 'dashboard') loadDashboard();
+    if (view === 'sharing') renderSharingForms();
+    if (view === 'map') loadFullMap();
     if (view === 'forms') renderForms();
     if (view === 'collect') renderCollectPicker();
     if (view === 'submissions') loadSubmissions();
@@ -211,18 +259,19 @@
   function closeAbout() { $('#aboutModal').classList.add('hidden'); }
 
   function renderDashboard(data) {
-    $('#metricForms').textContent = data.form_count ?? state.forms.length;
-    $('#metricSubmissions').textContent = data.submission_count ?? state.submissions.length;
-    const statuses = data.status_counts || {};
-    $('#metricOpen').textContent = statuses['Ouvert'] ?? 0;
-    $('#metricResolved').textContent = statuses['Résolu'] ?? 0;
-    renderStatusChart(statuses);
-    renderFormChart(data.by_form || []);
-    renderSubmissionTrend(data.monthly || []);
-    renderCollectMap(data.points || []);
-    renderRecent(data.recent || []);
+    $('#metricForms').textContent=data.form_count??state.forms.length;
+    $('#metricSubmissions').textContent=data.submission_count??state.submissions.length;
+    const statuses=data.status_counts||{};
+    $('#metricOpen').textContent=statuses['Ouvert']??0;
+    $('#metricResolved').textContent=statuses['Résolu']??0;
+    const geoCount=(data.points||[]).length;
+    const geoMetric=$('#metricGeo'); if(geoMetric) geoMetric.textContent=geoCount;
+    const geoRate=$('#metricGeoRate'); if(geoRate) geoRate.textContent=`${data.submission_count?Math.round(geoCount/data.submission_count*100):0}% du total`;
+    renderStatusChart(statuses); renderFormChart(data.by_form||[]); renderRecent(data.recent||[]);
+    renderMapPoints(data.points||[],false); renderTrend(data.daily_counts||[]);
     updateQueueIndicators();
   }
+
   function renderStatusChart(statuses) {
     const configs = [
       {key:'Ouvert',label:'Ouverts',cls:'fill-open'},
@@ -242,30 +291,6 @@
     const max = Math.max(1, ...visible.map(x => Number(x.value || 0)));
     root.innerHTML = visible.map(x => `<div class="bar-row"><div class="bar-label" title="${escapeHtml(x.label)}">${escapeHtml(x.label)}</div><div class="bar-track"><div class="bar-fill" style="width:${x.value ? Math.max(2, x.value/max*100) : 0}%"></div></div><div class="bar-value">${x.value}</div></div>`).join('');
   }
-  function renderSubmissionTrend(items) {
-    const root = $('#submissionTrend');
-    if (!items.length) { root.innerHTML = '<div class="chart-empty">Aucune donnée dans la période sélectionnée.</div>'; return; }
-    const values = items.map(x => Number(x.value || 0)); const max = Math.max(1, ...values);
-    const width = 640, height = 180, pad = 24;
-    const pts = values.map((v,i) => `${pad + (values.length===1 ? 0 : i*(width-2*pad)/(values.length-1))},${height-pad-(v/max)*(height-2*pad)}`).join(' ');
-    const area = `${pad},${height-pad} ${pts} ${width-pad},${height-pad}`;
-    root.innerHTML = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Tendance des soumissions" class="trend-svg"><defs><linearGradient id="trendFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#167d91" stop-opacity=".24"/><stop offset="100%" stop-color="#167d91" stop-opacity=".02"/></linearGradient></defs>${[.25,.5,.75,1].map(y=>`<line x1="${pad}" x2="${width-pad}" y1="${height-pad-y*(height-2*pad)}" y2="${height-pad-y*(height-2*pad)}" stroke="#e7edf1" stroke-dasharray="3 4"/>`).join('')}<polygon points="${area}" fill="url(#trendFill)"/><polyline points="${pts}" fill="none" stroke="#167d91" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>${values.map((v,i)=>{const x=pad+(values.length===1?0:i*(width-2*pad)/(values.length-1));const y=height-pad-(v/max)*(height-2*pad);return `<circle cx="${x}" cy="${y}" r="3.5" fill="#fff" stroke="#167d91" stroke-width="2"><title>${escapeHtml(items[i].label)} : ${v}</title></circle>`}).join('')}</svg><div class="trend-labels">${items.map(x=>`<span>${escapeHtml(x.label.slice(5) || x.label)}</span>`).join('')}</div>`;
-  }
-  function renderCollectMap(points) {
-    const root = $('#collectMap'); const count = $('#mapPointCount');
-    count.textContent = `${points.length} point${points.length===1?'':'s'} GPS`;
-    if (!window.L) { root.innerHTML = '<div class="map-empty">Carte en attente de la bibliothèque cartographique.</div>'; return; }
-    if (!state.map) { root.innerHTML=''; state.map = L.map(root, {zoomControl:true}).setView([-4.5,23.5], 4); L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:18,attribution:'© OpenStreetMap'}).addTo(state.map); }
-    state.mapMarkers.forEach(m=>state.map.removeLayer(m)); state.mapMarkers=[];
-    points.forEach(point=>{ const marker=L.circleMarker([point.lat,point.lon],{radius:7,color:'#fff',weight:2,fillColor:'#147d91',fillOpacity:.95}).addTo(state.map); marker.bindPopup(`<strong>${escapeHtml(point.title)}</strong><br>${escapeHtml(point.primary)}<br>${escapeHtml(point.province||'Province non renseignée')}<br>${escapeHtml(friendlyDate(point.submitted_at))}`);state.mapMarkers.push(marker); });
-    if(points.length){const group=L.featureGroup(state.mapMarkers);state.map.fitBounds(group.getBounds().pad(.2),{maxZoom:10});} else state.map.setView([-4.5,23.5],4);
-    setTimeout(()=>state.map.invalidateSize(),120);
-  }
-  $('#dashboardPeriod')?.addEventListener('change', loadDashboard);
-  $('#dashboardForm')?.addEventListener('change', loadDashboard);
-  $('#dashboardProvince')?.addEventListener('change', loadDashboard);
-  $('#dashboardRefresh')?.addEventListener('click', loadDashboard);
-
   function getStatus(data) {
     const status = data?.statut_incident || data?.status || '';
     if (status === 'Ouvert') return ['Ouvert','open'];
@@ -293,36 +318,15 @@
     $('#formCountLabel').textContent = `${forms.length} enquête${forms.length === 1 ? '' : 's'}`;
     $('#formsGrid').innerHTML = forms.map(form => `
       <article class="survey-card">
-        <div class="survey-card-top"><div class="survey-card-icon">▤</div><span class="survey-status">${form.public_enabled ? 'LIEN PUBLIC ACTIF' : 'DISPONIBLE'}</span></div>
+        <div class="survey-card-top"><div class="survey-card-icon">▤</div><span class="survey-status">DISPONIBLE</span></div>
         <h3>${escapeHtml(form.title)}</h3><p>${escapeHtml(form.description || 'Formulaire prêt à être utilisé pour la collecte de données.')}</p>
-        <div class="survey-card-bottom"><span class="survey-meta">${countQuestions(form)} questions · ${form.is_system ? 'Modèle intégré' : 'Personnalisé'}</span><div class="survey-actions"><button class="mini-action" data-preview-form="${form.id}">Aperçu</button><button class="mini-action primary-mini" data-start-form="${form.id}">Lancer</button><button class="mini-action share-mini" data-share-form="${form.id}">${form.public_enabled ? 'Copier lien' : 'Partager sans compte'}</button>${form.public_enabled ? `<button class="mini-action close-share-mini" data-close-share="${form.id}">Fermer lien</button>` : ''}${form.is_system ? '' : `<button class="mini-action delete-mini" data-delete-form="${form.id}" title="Supprimer">×</button>`}</div></div>
+        <div class="survey-card-bottom"><span class="survey-meta">${countQuestions(form)} questions · ${form.is_system ? 'Modèle intégré' : 'Personnalisé'}</span><div class="survey-actions"><button class="mini-action" data-preview-form="${form.id}">Aperçu</button><button class="mini-action" data-share-form="${form.id}">Partager</button><button class="mini-action primary-mini" data-start-form="${form.id}">Lancer</button>${form.is_system ? '' : `<button class="mini-action delete-mini" data-delete-form="${form.id}" title="Supprimer">×</button>`}</div></div>
       </article>`).join('');
     $('#formsEmpty').classList.toggle('hidden', forms.length > 0);
     $$('[data-start-form]').forEach(btn => btn.addEventListener('click', () => { state.selectedFormId = Number(btn.dataset.startForm); navigate('collect'); renderCollectPicker(); renderCollectForm(state.selectedFormId); }));
     $$('[data-preview-form]').forEach(btn => btn.addEventListener('click', () => previewForm(Number(btn.dataset.previewForm))));
+    $$('[data-share-form]').forEach(btn => btn.addEventListener('click', async () => { $('#shareFormSelect').value=btn.dataset.shareForm; navigate('sharing'); await createShareLink(Number(btn.dataset.shareForm)); }));
     $$('[data-delete-form]').forEach(btn => btn.addEventListener('click', () => deleteForm(Number(btn.dataset.deleteForm))));
-    $$('[data-share-form]').forEach(btn => btn.addEventListener('click', () => shareForm(Number(btn.dataset.shareForm))));
-    $$('[data-close-share]').forEach(btn => btn.addEventListener('click', () => closePublicShare(Number(btn.dataset.closeShare))));
-  }
-  async function shareForm(formId) {
-    try {
-      const result = await api(`/api/forms/${formId}/publish`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:true})});
-      const link = new URL(result.public_url, window.location.origin).href;
-      showShareDialog(link, state.forms.find(f => Number(f.id) === Number(formId))?.title || 'Formulaire public');
-      try { await navigator.clipboard.writeText(link); toast('Lien public copié', 'success', 'Toute personne ayant ce lien peut répondre sans compte.'); } catch {}
-      await loadForms();
-    } catch (error) { toast('Impossible de publier le lien', 'error', error.message); }
-  }
-  function showShareDialog(link, title) {
-    let modal = $('#shareDialog');
-    if (!modal) { modal = document.createElement('div'); modal.id='shareDialog'; modal.className='modal-backdrop'; modal.innerHTML='<div class="modal-card share-dialog-card"><div class="modal-header"><div><div class="eyebrow">PARTAGE PARTICIPANT</div><h2 id="shareDialogTitle">Lien public</h2></div><button class="icon-button" id="shareDialogClose" aria-label="Fermer">×</button></div><div class="share-dialog-content"><p>Les participants peuvent ouvrir ce lien et envoyer une réponse <strong>sans créer de compte CollectPlus</strong>.</p><label class="share-link-label">Lien du formulaire<input id="shareLinkInput" readonly></label><div class="share-dialog-actions"><button class="button button-primary" id="shareCopyButton">Copier le lien</button><button class="button button-secondary" id="shareNativeButton">Partager…</button></div><div class="qr-wrap"><div id="shareQr"></div><span>QR code à scanner sur téléphone</span></div><p class="share-caution">Le lien est public et transmissible. Fermez-le depuis la fiche enquête lorsque la collecte est terminée.</p></div></div>'; document.body.appendChild(modal); $('#shareDialogClose').addEventListener('click',()=>modal.remove()); modal.addEventListener('click',e=>{if(e.target===modal)modal.remove()}); $('#shareCopyButton').addEventListener('click',async()=>{try{await navigator.clipboard.writeText($('#shareLinkInput').value);toast('Lien copié')}catch{$('#shareLinkInput').select();document.execCommand('copy');toast('Lien copié')}}); $('#shareNativeButton').addEventListener('click',async()=>{if(navigator.share){try{await navigator.share({title:$('#shareDialogTitle').textContent,url:$('#shareLinkInput').value})}catch{}}else{try{await navigator.clipboard.writeText($('#shareLinkInput').value);toast('Lien copié')}catch{}}}); }
-    $('#shareDialogTitle').textContent=title; $('#shareLinkInput').value=link; $('#shareQr').innerHTML='';
-    if (window.QRCode) new QRCode($('#shareQr'),{text:link,width:168,height:168,colorDark:'#142b4a',colorLight:'#ffffff',correctLevel:QRCode.CorrectLevel.M}); else $('#shareQr').innerHTML='<span class="hint-badge">QR code indisponible hors connexion</span>';
-  }
-  async function closePublicShare(formId) {
-    if (!confirm('Fermer ce lien public ? Les participants ne pourront plus soumettre de réponse avec ce lien.')) return;
-    try { await api(`/api/forms/${formId}/publish`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:false})}); toast('Lien public fermé'); await loadForms(); }
-    catch (error) { toast('Erreur lors de la fermeture', 'error', error.message); }
   }
   function countQuestions(form) { return (form.sections || []).reduce((sum, section) => sum + (section.questions || []).length, 0); }
   $('#formSearch').addEventListener('input', renderForms);
@@ -350,12 +354,10 @@
     const name = escapeHtml(q.name);
     if (type === 'note') {
       control = `<div class="question-hint">${escapeHtml(q.label)}</div>`;
-      return `<div class="question-field full-width" data-question="${name}">${control}${hint}</div>`;
+      return `<div class="question-field full-width" data-question="${name}" data-relevant="${escapeHtml(q.relevant || '')}" data-required="${q.required ? 'true' : 'false'}">${control}${hint}</div>`;
     }
     if (type === 'select' || type === 'select_one') {
       control = `<select class="question-control" name="${name}"${required}><option value="">Sélectionner…</option>${(q.options || []).map(option => `<option value="${escapeHtml(option)}">${escapeHtml(option)}</option>`).join('')}</select>`;
-    } else if (type === 'geopoint' || ['gps','location'].includes(String(q.name).toLowerCase())) {
-      control = `<div class="gps-field"><input class="question-control" type="text" name="${name}"${required} placeholder="latitude longitude altitude précision"><button type="button" class="button button-secondary small-button" data-capture-gps="${name}">⌖ GPS</button></div>`;
     } else if (type === 'multiselect' || type === 'select_multiple') {
       control = `<div class="choice-list">${(q.options || []).map((option, i) => `<label class="choice-option"><input type="checkbox" name="${name}" value="${escapeHtml(option)}"><span>${escapeHtml(option)}</span></label>`).join('')}</div>`;
       if (q.required) control += `<input type="text" class="multi-required-proxy" name="${name}__required" required tabindex="-1" aria-hidden="true" style="position:absolute;width:1px;height:1px;opacity:0;pointer-events:none">`;
@@ -365,8 +367,52 @@
       const placeholder = q.placeholder ? ` placeholder="${escapeHtml(q.placeholder)}"` : '';
       control = type === 'textarea' ? `<textarea class="question-control" name="${name}" rows="3"${required}${placeholder}></textarea>` : `<input class="question-control" type="${actualType}" name="${name}"${type === 'number' ? ' step="any"' : ''}${required}${placeholder}>`;
     }
-    return `<div class="question-field ${full ? 'full-width' : ''}"><label class="question-label" for="q-${name}">${escapeHtml(q.label)}${star}</label>${control}${hint}</div>`;
+    return `<div class="question-field ${full ? 'full-width' : ''}" data-question="${name}" data-relevant="${escapeHtml(q.relevant || '')}" data-required="${q.required ? 'true' : 'false'}"><label class="question-label" for="q-${name}">${escapeHtml(q.label)}${star}</label>${control}${hint}</div>`;
   }
+  function evaluateRelevant(expression, root) {
+    const expr=String(expression||'').trim(); if(!expr)return true;
+    const clauses=expr.replace(/^\(|\)$/g,'').split(/\s+(and|or)\s+/i);
+    let result=null, operator='and';
+    for(const part of clauses){
+      if(/^(and|or)$/i.test(part)){operator=part.toLowerCase();continue;}
+      let condition=part.trim().replace(/^\(|\)$/g,'');
+      let match=condition.match(/^not\s*\(\s*selected\s*\(\s*\$\{([^}]+)\}\s*,\s*['"]([^'"]+)['"]\s*\)\s*\)$/i);
+      let value=false;
+      if(match){const field=match[1],choice=match[2],vals=[...root.querySelectorAll(`[name="${CSS.escape(field)}"]:checked`)].map(x=>x.value);value=!vals.includes(choice);}
+      else {
+        match=condition.match(/^selected\s*\(\s*\$\{([^}]+)\}\s*,\s*['"]([^'"]+)['"]\s*\)$/i);
+        if(match){const vals=[...root.querySelectorAll(`[name="${CSS.escape(match[1])}"]:checked`)].map(x=>x.value);value=vals.includes(match[2]);}
+        else {
+          match=condition.match(/^\$\{([^}]+)\}\s*(=|==|!=|>=|<=|>|<)\s*['"]?([^'"]*)['"]?$/);
+          if(match){const target=root.querySelector(`[name="${CSS.escape(match[1])}"]`),actual=target?.value||'',expected=match[3];let left=actual,right=expected;
+            if(['>','<','>=','<='].includes(match[2])){left=Number(actual);right=Number(expected);}
+            switch(match[2]){case '=':case '==':value=String(left)===String(right);break;case '!=':value=String(left)!==String(right);break;case '>':value=left>right;break;case '<':value=left<right;break;case '>=':value=left>=right;break;case '<=':value=left<=right;break;}
+          } else { return true; }
+        }
+      }
+      result=result===null?value:(operator==='and'?result&&value:result||value);
+    }
+    return result===null?true:!!result;
+  }
+
+  function applyCollectRelevant(formRoot) {
+    $$('[data-relevant]',formRoot).forEach(node=>{
+      const expr=(node.dataset.relevant||'').trim(); if(!expr){node.style.display='';return;}
+      const show=evaluateRelevant(expr,formRoot);
+      node.style.display=show?'':'none';
+      const isCheckboxGroup=node.querySelectorAll('input[type="checkbox"]').length>0;
+      node.querySelectorAll('input,select,textarea').forEach(el=>{
+        el.required=show&&node.dataset.required==='true'&&(!isCheckboxGroup||el.classList.contains('multi-required-proxy'));
+        if(!show){if(el.type==='checkbox')el.checked=false;else el.value='';if(el.classList.contains('multi-required-proxy'))el.setCustomValidity('');}
+        else if(el.classList.contains('multi-required-proxy')){
+          const groupName=el.name.replace('__required','');
+          const checked=formRoot.querySelectorAll(`input[name="${CSS.escape(groupName)}"]:checked`).length>0;
+          el.setCustomValidity(checked?'':'Sélectionnez au moins une réponse.');
+        }
+      });
+    });
+  }
+
   function renderCollectForm(formId) {
     const form = state.forms.find(f => f.id === formId);
     if (!form) { $('#collectMain').innerHTML = '<div class="empty-collect panel"><h3>Enquête introuvable</h3><p>Actualisez la page ou choisissez une autre enquête.</p></div>'; return; }
@@ -376,17 +422,12 @@
       <div class="collect-form-footer"><div class="form-footer-note">* Champ obligatoire · Enregistrement local si hors ligne</div><div class="form-footer-buttons"><button class="button button-secondary" type="button" id="resetSurveyButton">Effacer</button><button class="button button-primary" type="submit">Enregistrer la réponse <span>→</span></button></div></div>
     </form>`;
     const surveyForm = $('#activeSurveyForm');
-    $$('[data-capture-gps]', surveyForm).forEach(button => button.addEventListener('click', () => {
-      const field = surveyForm.elements.namedItem(button.dataset.captureGps);
-      if (!navigator.geolocation) { toast('GPS indisponible sur ce navigateur', 'error'); return; }
-      button.disabled = true; button.textContent = 'Recherche…';
-      navigator.geolocation.getCurrentPosition(pos => { field.value = [pos.coords.latitude,pos.coords.longitude,pos.coords.altitude ?? '',pos.coords.accuracy].join(' '); button.disabled=false;button.textContent='✓ GPS';updateFormProgress(); }, () => { toast('Autorisez la localisation puis réessayez', 'error');button.disabled=false;button.textContent='⌖ GPS'; }, {enableHighAccuracy:true,timeout:20000});
-    }));
     $$('.question-field input, .question-field select, .question-field textarea', surveyForm).forEach(input => {
       if (input.type === 'date' && input.name === 'date_declaration' && !input.value) input.value = new Date().toISOString().slice(0,10);
-      input.addEventListener('input', updateFormProgress);
-      input.addEventListener('change', updateFormProgress);
+      input.addEventListener('input', () => { applyCollectRelevant(surveyForm); updateFormProgress(); });
+      input.addEventListener('change', () => { applyCollectRelevant(surveyForm); updateFormProgress(); });
     });
+    applyCollectRelevant(surveyForm);
     $$('.multi-required-proxy', surveyForm).forEach(proxy => {
       proxy.addEventListener('invalid', e => e.preventDefault());
       const groupName = proxy.name.replace('__required','');
@@ -600,6 +641,7 @@
       <div class="builder-question-grid"><label>Libellé de la question *<input data-q-field="label" data-q-index="${i}" value="${escapeHtml(q.label)}" placeholder="Ex. Quel est votre âge ?"></label><label>Type de réponse<select data-q-field="type" data-q-index="${i}">${[['text','Texte court'],['textarea','Texte long'],['number','Nombre'],['date','Date'],['time','Heure'],['select','Liste à choix unique'],['multiselect','Choix multiples'],['email','E-mail'],['phone','Téléphone']].map(([v,l])=>`<option value="${v}" ${q.type===v?'selected':''}>${l}</option>`).join('')}</select></label></div>
       ${['select','multiselect'].includes(q.type) ? `<div class="builder-option-row"><label>Options de réponse (séparées par des virgules)<input data-q-field="options" data-q-index="${i}" value="${escapeHtml(q.options || '')}" placeholder="Oui, Non, Ne sait pas"></label></div>` : ''}
       <div style="margin-top:11px"><label class="builder-required"><input type="checkbox" data-q-field="required" data-q-index="${i}" ${q.required?'checked':''}> Réponse obligatoire</label></div>
+      <div class="builder-option-row"><label>Condition d’affichage (facultatif, syntaxe XLSForm)<input data-q-field="relevant" data-q-index="${i}" value="${escapeHtml(q.relevant||'')}" placeholder="${'${question_precedente} = \'Oui\''}"></label></div>
     </div>`).join('');
     $$('[data-q-field]', $('#builderQuestions')).forEach(input => {
       input.addEventListener('input', () => updateBuilderQuestion(input));
@@ -637,6 +679,8 @@
       if (!q.label.trim()) { toast(`Le libellé de la question ${i+1} est obligatoire`, 'error'); return; }
       const name = slugify(q.name || q.label) || `question_${i+1}`;
       const question = {name, label:q.label.trim(), type:q.type, required:!!q.required};
+      if(String(q.relevant||'').trim()) question.relevant=String(q.relevant).trim();
+      if(String(q.relevant||'').trim()) question.relevant=String(q.relevant).trim();
       if (['select','multiselect'].includes(q.type)) {
         question.options = String(q.options || '').split(',').map(x => x.trim()).filter(Boolean);
         if (!question.options.length) { toast(`Ajoutez les choix de la question ${i+1}`, 'error'); return; }
@@ -702,7 +746,39 @@
     updateQueueIndicators();
   }
 
-  async function init() {
+  async function createShareLink(formId) {
+    try {
+      const result=await api(`/api/forms/${formId}/share`,{method:'POST'});
+      const idx=state.forms.findIndex(f=>Number(f.id)===Number(formId));
+      if(idx>=0){state.forms[idx].public_enabled=true;state.forms[idx].share_token=result.token;writeLS(LS.forms,state.forms);renderForms();}
+      const configuredRaw=String(readLS(LS.settings,{}).apiBase||window.location.origin).trim(); const configuredBase=configuredRaw.endsWith('/')?configuredRaw.slice(0,-1):configuredRaw;
+      const url=`${configuredBase}/public/${result.token}`;
+      $('#shareUrl').value=url; $('#shareResult').classList.remove('hidden');
+      $('#shareStatus').textContent='Lien actif : toute personne disposant de ce lien peut répondre sans compte.';
+      $('#shareQr').innerHTML='';
+      if(window.QRCode) new QRCode($('#shareQr'),{text:url,width:150,height:150,colorDark:'#102d4d',colorLight:'#ffffff',correctLevel:QRCode.CorrectLevel.H});
+      else $('#shareQr').innerHTML=`<img alt="QR code du formulaire public" width="150" height="150" src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(url)}">`;
+      renderSharingForms(); toast('Lien public créé','success','Vous pouvez copier le lien ou partager le QR code.');
+    } catch(e){toast('Impossible de créer le lien public','error',e.message);}
+  }
+
+  async function renderSharingForms() {
+    const host=$('#sharingFormsList'); if(!host) return;
+    if(!state.forms.length){host.innerHTML='<p class="empty-cell">Aucune enquête disponible.</p>';return;}
+    host.innerHTML=state.forms.map(form=>`<div class="sharing-row"><div><strong>${escapeHtml(form.short_title||form.title)}</strong><small>${form.public_enabled?'Lien public activé':'Lien non publié'}</small></div><button class="button ${form.public_enabled?'button-secondary':'button-primary'}" data-share-action="${form.id}">${form.public_enabled?'Voir / renouveler':'Partager'}</button></div>`).join('');
+    host.querySelectorAll('[data-share-action]').forEach(btn=>btn.addEventListener('click',()=>createShareLink(Number(btn.dataset.shareAction))));
+  }
+
+  async function loadFullMap() {
+    try{
+      const period=$('#mapPeriodFilter')?.value||'30', form=$('#mapFormFilter')?.value||'all';
+      const params=new URLSearchParams({period,province:'all'}); if(form!=='all')params.set('form_id',form);
+      const data=await api(`/api/dashboard?${params.toString()}`);
+      renderMapPoints(data.points||[],true);
+    }catch(e){$('#fullMapSummary').textContent='Impossible de charger les positions : '+e.message;}
+  }
+
+    async function init() {
     applySettings();
     bindNavigation();
     setConnectionStatus();
@@ -711,6 +787,22 @@
     state.forms = readLS(LS.forms, []);
     state.submissions = readLS(LS.submissions, []);
     if (state.forms.length) { renderForms(); renderCollectPicker(); }
+    $('#dashboardRefresh')?.addEventListener('click',loadDashboard);
+    $('#dashboardPeriod')?.addEventListener('change',loadDashboard);
+    $('#dashboardForm')?.addEventListener('change',loadDashboard);
+    $('#dashboardProvince')?.addEventListener('change',loadDashboard);
+    $('#mapRefreshButton')?.addEventListener('click',loadFullMap);
+    $('#mapFormFilter')?.addEventListener('change',loadFullMap);
+    $('#mapPeriodFilter')?.addEventListener('change',loadFullMap);
+    $('#createShareButton')?.addEventListener('click',()=>createShareLink(Number($('#shareFormSelect').value)));
+    $('#copyShareButton')?.addEventListener('click',async()=>{try{await navigator.clipboard.writeText($('#shareUrl').value);toast('Lien copié','success');}catch{ $('#shareUrl').select();document.execCommand('copy');toast('Lien copié','success');}});
+    $('#downloadQrButton')?.addEventListener('click',()=>{
+      const canvas=$('#shareQr canvas'), img=$('#shareQr img');
+      const href=canvas?canvas.toDataURL('image/png'):img?.src;
+      if(!href){toast('QR code non disponible','error');return;}
+      const link=document.createElement('a');link.href=href;link.download='CollectPlus-QR.png';link.click();
+    });
+    $('#disableShareButton')?.addEventListener('click',async()=>{const id=Number($('#shareFormSelect').value);try{await api(`/api/forms/${id}/share?enabled=false`,{method:'PUT'});$('#shareStatus').textContent='Lien désactivé : les nouvelles soumissions sont bloquées.';toast('Lien public désactivé','success');await loadForms();renderSharingForms();}catch(e){toast('Erreur de désactivation','error',e.message);}});
     await refreshAll();
     renderReportSummary();
   }

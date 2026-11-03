@@ -4,15 +4,16 @@ import csv
 import io
 import json
 import os
+import re
 import sqlite3
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, UploadFile, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse, HTMLResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from openpyxl import Workbook, load_workbook
 from pydantic import BaseModel, Field
@@ -26,10 +27,11 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(
     title="CollectPlus",
-    version="0.4.0",
-    description="Plateforme de collecte mobile, partage public anonyme, cartographie GPS et tableaux de bord dynamiques.",
+    version="0.5.0",
+    description="Plateforme de collecte mobile et de visualisation des enquêtes.",
 )
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
+allowed_origins = [origin.strip() for origin in os.getenv("COLLECTPLUS_CORS_ORIGINS", "https://collectplus.onrender.com,http://localhost:8000,http://127.0.0.1:8000,http://localhost,capacitor://localhost").split(",") if origin.strip()]
+app.add_middleware(CORSMiddleware, allow_origins=allowed_origins, allow_credentials=False, allow_methods=["GET", "POST", "PUT", "DELETE"], allow_headers=["Content-Type", "Authorization"])
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
@@ -143,12 +145,6 @@ def init_db() -> None:
             created_at TEXT NOT NULL,
             is_system INTEGER NOT NULL DEFAULT 0
         )""")
-        # Backward-compatible migrations for form sharing.
-        columns = {row[1] for row in conn.execute("PRAGMA table_info(forms)").fetchall()}
-        if "public_token" not in columns:
-            conn.execute("ALTER TABLE forms ADD COLUMN public_token TEXT")
-        if "public_enabled" not in columns:
-            conn.execute("ALTER TABLE forms ADD COLUMN public_enabled INTEGER NOT NULL DEFAULT 0")
         conn.execute("""CREATE TABLE IF NOT EXISTS submissions (
             id TEXT PRIMARY KEY,
             form_id INTEGER NOT NULL,
@@ -156,6 +152,13 @@ def init_db() -> None:
             submitted_at TEXT NOT NULL,
             FOREIGN KEY(form_id) REFERENCES forms(id)
         )""")
+        # Safe, idempotent migrations for public form sharing.
+        form_columns = {r["name"] for r in conn.execute("PRAGMA table_info(forms)").fetchall()}
+        if "share_token" not in form_columns:
+            conn.execute("ALTER TABLE forms ADD COLUMN share_token TEXT")
+        if "public_enabled" not in form_columns:
+            conn.execute("ALTER TABLE forms ADD COLUMN public_enabled INTEGER NOT NULL DEFAULT 0")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_forms_share_token ON forms(share_token)")
         row = conn.execute("SELECT id FROM forms WHERE short_title = ?", (MAPEPI_FORM["short_title"],)).fetchone()
         if row is None:
             conn.execute(
@@ -174,7 +177,7 @@ def form_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     schema["created_at"] = row["created_at"]
     schema["is_system"] = bool(row["is_system"])
     schema["public_enabled"] = bool(row["public_enabled"]) if "public_enabled" in row.keys() else False
-    schema["public_token"] = row["public_token"] if "public_token" in row.keys() else None
+    schema["share_token"] = row["share_token"] if "share_token" in row.keys() else None
     return schema
 
 
@@ -211,64 +214,9 @@ def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
 
 
-@app.get("/p/{token}")
+@app.get("/public/{token}")
 def public_form_page(token: str) -> FileResponse:
-    with db_conn() as conn:
-        row = conn.execute("SELECT id FROM forms WHERE public_token=? AND public_enabled=1", (token,)).fetchone()
-    if row is None:
-        raise HTTPException(status_code=404, detail="Ce formulaire public est indisponible ou a été fermé.")
     return FileResponse(STATIC_DIR / "public.html")
-
-
-@app.get("/api/public/forms/{token}")
-def get_public_form(token: str) -> dict[str, Any]:
-    with db_conn() as conn:
-        row = conn.execute("SELECT * FROM forms WHERE public_token=? AND public_enabled=1", (token,)).fetchone()
-    if row is None:
-        raise HTTPException(status_code=404, detail="Formulaire public indisponible")
-    schema = form_to_dict(row)
-    # Do not expose management fields or internal form database identifiers to respondents.
-    return {"key": schema.get("key"), "title": schema.get("title"), "short_title": schema.get("short_title"), "description": schema.get("description"), "sections": schema.get("sections", [])}
-
-
-@app.post("/api/public/forms/{token}/submissions")
-def submit_public_form(token: str, submission: dict[str, Any]) -> dict[str, Any]:
-    with db_conn() as conn:
-        row = conn.execute("SELECT * FROM forms WHERE public_token=? AND public_enabled=1", (token,)).fetchone()
-    if row is None:
-        raise HTTPException(status_code=404, detail="Formulaire public indisponible")
-    schema = form_to_dict(row)
-    data = submission.get("data")
-    if not isinstance(data, dict):
-        raise HTTPException(status_code=422, detail="Les réponses doivent être fournies sous forme d'objet.")
-    # Honeypot field: silently acknowledge automated spam without storing it.
-    if str(data.get("website", "")).strip():
-        return {"ok": True, "id": str(uuid.uuid4()), "submitted_at": utc_now(), "message": "Votre réponse a été enregistrée."}
-    # Enforce required questions server-side as well as in the public browser form.
-    for section in schema.get("sections", []):
-        for question in section.get("questions", []):
-            if question.get("required") and not question.get("type") == "note":
-                value = data.get(question.get("name"))
-                if value is None or value == "" or value == []:
-                    raise HTTPException(status_code=422, detail=f"Réponse obligatoire manquante : {question.get('label', question.get('name'))}")
-    sub_id = str(uuid.uuid4())
-    submitted_at = utc_now()
-    data["_submission_channel"] = "public_link_anonymous"
-    with db_conn() as conn:
-        conn.execute("INSERT INTO submissions(id, form_id, payload_json, submitted_at) VALUES (?, ?, ?, ?)", (sub_id, row["id"], json.dumps(data, ensure_ascii=False), submitted_at))
-    return {"ok": True, "id": sub_id, "submitted_at": submitted_at, "message": "Votre réponse a été enregistrée."}
-
-
-@app.post("/api/forms/{form_id}/publish")
-def publish_form(form_id: int, payload: dict[str, Any]) -> dict[str, Any]:
-    enabled = bool(payload.get("enabled", True))
-    with db_conn() as conn:
-        row = conn.execute("SELECT id, public_token FROM forms WHERE id=?", (form_id,)).fetchone()
-        if row is None:
-            raise HTTPException(status_code=404, detail="Enquête introuvable")
-        token = row["public_token"] or uuid.uuid4().hex + uuid.uuid4().hex[:16]
-        conn.execute("UPDATE forms SET public_token=?, public_enabled=? WHERE id=?", (token, int(enabled), form_id))
-    return {"form_id": form_id, "public_enabled": enabled, "public_token": token, "public_url": f"/p/{token}" if enabled else None}
 
 
 @app.get("/manifest.webmanifest")
@@ -394,6 +342,12 @@ def parse_xlsform(content: bytes, filename: str) -> dict[str, Any]:
         q: dict[str, Any] = {"name": name, "label": label, "required": required}
         if hint:
             q["hint"] = hint
+        relevant = str(record.get("relevant") or "").strip()
+        constraint = str(record.get("constraint") or "").strip()
+        constraint_message = str(record.get("constraint_message::French (fr)") or record.get("constraint_message") or "").strip()
+        if relevant: q["relevant"] = relevant
+        if constraint: q["constraint"] = constraint
+        if constraint_message: q["constraint_message"] = constraint_message
         if raw_type.startswith("select_one "):
             q["type"] = "select"
             list_name = raw_type.split(" ", 1)[1].strip()
@@ -428,10 +382,44 @@ def parse_xlsform(content: bytes, filename: str) -> dict[str, Any]:
     }
 
 
+def parse_csv_form(content: bytes, filename: str) -> dict[str, Any]:
+    try:
+        text = content.decode("utf-8-sig")
+        rows = list(csv.DictReader(io.StringIO(text)))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"CSV illisible : {exc}")
+    if not rows:
+        raise HTTPException(status_code=400, detail="Le CSV ne contient aucune question.")
+    questions=[]
+    for idx, row in enumerate(rows, 1):
+        normalized={str(k or "").strip().lower():str(v or "").strip() for k,v in row.items()}
+        label=normalized.get("label") or normalized.get("question") or normalized.get("libelle")
+        name=normalized.get("name") or normalized.get("nom") or f"question_{idx}"
+        qtype=(normalized.get("type") or normalized.get("type_reponse") or "text").lower()
+        if not label: continue
+        q={"name":name,"label":label,"type":qtype,"required":normalized.get("required","").lower() in ("yes","oui","true","1")}
+        options=normalized.get("options") or normalized.get("choices") or ""
+        if qtype in ("select","multiselect","select_one","select_multiple"):
+            q["type"]="multiselect" if qtype in ("multiselect","select_multiple") else "select"
+            q["options"]=[v.strip() for v in re.split(r"[;,|]",options) if v.strip()]
+            if not q["options"]: q["options"]=["Option 1","Option 2"]
+        hint=normalized.get("hint")
+        if hint:q["hint"]=hint
+        relevant=normalized.get("relevant") or normalized.get("condition")
+        if relevant:q["relevant"]=relevant
+        questions.append(q)
+    if not questions: raise HTTPException(status_code=400,detail="Aucune ligne avec un libellé question exploitable.")
+    title=Path(filename).stem.replace("_"," ").strip().title()
+    return {"key":f"csv-{uuid.uuid4().hex[:8]}","title":title,"short_title":title[:80],
+            "description":f"Formulaire importé depuis {filename}.","version":1,"sections":[{"title":"Questionnaire","questions":questions}]}
+
+
 @app.post("/api/forms/import")
 async def import_form(file: UploadFile = File(...)) -> dict[str, Any]:
     filename = file.filename or "formulaire"
     content = await file.read()
+    if len(content) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Le fichier dépasse la limite de 10 Mo.")
     suffix = Path(filename).suffix.lower()
     if suffix == ".json":
         try:
@@ -445,8 +433,10 @@ async def import_form(file: UploadFile = File(...)) -> dict[str, Any]:
         schema.setdefault("description", "Formulaire importé depuis JSON.")
     elif suffix in (".xlsx", ".xlsm"):
         schema = parse_xlsform(content, filename)
+    elif suffix == ".csv":
+        schema = parse_csv_form(content, filename)
     else:
-        raise HTTPException(status_code=400, detail="Format non pris en charge. Utilisez un XLSForm .xlsx ou un schéma .json CollectPlus.")
+        raise HTTPException(status_code=400, detail="Format non pris en charge. Utilisez XLSForm .xlsx, CSV questions ou JSON CollectPlus.")
     form = FormCreate(title=str(schema.get("title", "Enquête importée")), short_title=str(schema.get("short_title", schema.get("title", "Enquête importée")))[:80], description=str(schema.get("description", "")), sections=schema["sections"])
     created = create_form(form)
     if schema.get("import_warnings"):
@@ -510,67 +500,222 @@ def list_submissions(form_id: int | None = None) -> list[dict[str, Any]]:
 
 
 @app.get("/api/dashboard")
-def dashboard(start_date: str | None = None, end_date: str | None = None, form_id: int | None = None, province: str | None = None) -> dict[str, Any]:
-    records = read_submissions(form_id)
+def dashboard(period: str = "30", form_id: int | None = None, province: str = "all") -> dict[str, Any]:
+    """Return live metrics and map points, filtered by date/form/province."""
+    with db_conn() as conn:
+        form_count = conn.execute("SELECT COUNT(*) FROM forms").fetchone()[0]
+        rows = conn.execute("""SELECT s.id, s.form_id, s.payload_json, s.submitted_at, f.short_title, f.title AS form_title
+                               FROM submissions s JOIN forms f ON f.id=s.form_id ORDER BY s.submitted_at DESC""").fetchall()
+        by_form_rows = conn.execute("SELECT id, short_title FROM forms ORDER BY short_title").fetchall()
+    cutoff = None
+    if period not in ("all", "custom"):
+        try:
+            days = max(1, min(int(period), 3650))
+            cutoff = datetime.now(timezone.utc).date().isoformat()
+            from datetime import timedelta
+            cutoff = (datetime.now(timezone.utc).date() - timedelta(days=days-1)).isoformat()
+        except ValueError:
+            period = "30"
+            from datetime import timedelta
+            cutoff = (datetime.now(timezone.utc).date() - timedelta(days=29)).isoformat()
     filtered = []
-    for rec in records:
-        date_part = str(rec.get("submitted_at", ""))[:10]
-        if start_date and date_part < start_date: continue
-        if end_date and date_part > end_date: continue
-        if province and province != "all":
-            pv = str(rec.get("data", {}).get("province", ""))
-            if pv.casefold() != province.casefold(): continue
-        filtered.append(rec)
-    all_forms = list_forms()
+    province_values = set()
+    for row in rows:
+        payload = json.loads(row["payload_json"])
+        prov = str(payload.get("province") or payload.get("Province") or payload.get("province_name") or "").strip()
+        if prov:
+            province_values.add(prov)
+        if form_id is not None and int(row["form_id"]) != int(form_id):
+            continue
+        if province != "all" and prov.lower() != province.lower():
+            continue
+        date_str = str(row["submitted_at"] or "")[:10]
+        if cutoff and date_str < cutoff:
+            continue
+        filtered.append({"id": row["id"], "form_id": row["form_id"], "form_title": row["short_title"],
+                         "data": payload, "submitted_at": row["submitted_at"]})
     statuses: dict[str, int] = {"Ouvert": 0, "En cours": 0, "Résolu": 0}
     disease_counts: dict[str, int] = {}
-    by_form_counts: dict[str, int] = {}
-    monthly: dict[str, int] = {}
+    by_form: dict[str, int] = {str(r["short_title"]): 0 for r in by_form_rows}
     points: list[dict[str, Any]] = []
-    for rec in filtered:
-        payload = rec["data"]
-        status = payload.get("statut_incident") or payload.get("status")
-        if status in statuses: statuses[status] += 1
+    daily_counts: dict[str, int] = {}
+    for row in filtered:
+        payload = row["data"]
+        status = payload.get("statut_incident") or payload.get("statut")
+        if status in statuses:
+            statuses[status] += 1
         diseases = payload.get("maladie_echantillon", [])
         if isinstance(diseases, str): diseases = [diseases]
         if isinstance(diseases, list):
-            for disease in diseases: disease_counts[str(disease)] = disease_counts.get(str(disease), 0) + 1
-        title = rec.get("short_title") or rec.get("form_title") or "Enquête"
-        by_form_counts[title] = by_form_counts.get(title, 0) + 1
-        month = str(rec.get("submitted_at", ""))[:7]
-        if month: monthly[month] = monthly.get(month, 0) + 1
-        lat, lon = extract_coordinates(payload)
+            for disease in diseases:
+                disease_counts[str(disease)] = disease_counts.get(str(disease), 0) + 1
+        by_form[row["form_title"]] = by_form.get(row["form_title"], 0) + 1
+        day = str(row["submitted_at"] or "")[:10]
+        if day: daily_counts[day] = daily_counts.get(day, 0) + 1
+        lat, lon = _extract_coordinates(payload)
         if lat is not None and lon is not None:
-            points.append({"id": rec["id"], "lat": lat, "lon": lon, "title": title, "submitted_at": rec["submitted_at"], "province": payload.get("province", ""), "primary": payload.get("reference_incident") or payload.get("name") or rec["id"][:8]})
+            points.append({"id": row["id"], "form_title": row["form_title"], "submitted_at": row["submitted_at"],
+                           "province": payload.get("province") or payload.get("Province") or "",
+                           "latitude": lat, "longitude": lon})
+    recent = filtered[:7]
     return {
-        "form_count": len(all_forms), "submission_count": len(filtered), "status_counts": statuses,
-        "disease_counts": disease_counts,
-        "by_form": [{"label": k, "value": v} for k, v in sorted(by_form_counts.items(), key=lambda x: -x[1])],
-        "monthly": [{"label": k, "value": v} for k, v in sorted(monthly.items())],
-        "points": points, "recent": filtered[:7],
-        "filter_context": {"start_date": start_date, "end_date": end_date, "form_id": form_id, "province": province}
+        "form_count": form_count, "submission_count": len(filtered),
+        "status_counts": statuses, "disease_counts": disease_counts,
+        "by_form": [{"label": label, "value": value} for label, value in sorted(by_form.items(), key=lambda x: (-x[1], x[0]))],
+        "daily_counts": [{"date": d, "value": n} for d, n in sorted(daily_counts.items())],
+        "points": points, "provinces": sorted(province_values),
+        "recent": recent,
     }
 
 
-def extract_coordinates(payload: dict[str, Any]) -> tuple[float | None, float | None]:
-    # Supports explicit latitude/longitude fields and common XLSForm geopoint representations.
-    for lat_key, lon_key in (("latitude", "longitude"), ("lat", "lon"), ("gps_latitude", "gps_longitude")):
+def _extract_coordinates(payload: dict[str, Any]) -> tuple[float | None, float | None]:
+    """Recognize common Kobo/ODK geopoint representations in submissions."""
+    candidates = [payload.get("gps"), payload.get("geopoint"), payload.get("location"), payload.get("_geolocation")]
+    lat_keys = ("latitude", "lat", "gps_latitude")
+    lon_keys = ("longitude", "lon", "lng", "gps_longitude")
+    for value in candidates:
         try:
-            if payload.get(lat_key) is not None and payload.get(lon_key) is not None:
-                lat, lon = float(payload[lat_key]), float(payload[lon_key])
-                if -90 <= lat <= 90 and -180 <= lon <= 180: return lat, lon
-        except (TypeError, ValueError): pass
-    for key, value in payload.items():
-        if str(key).lower() in ("location", "geopoint", "gps", "point_gps", "position"):
-            try:
-                if isinstance(value, (list, tuple)) and len(value) >= 2:
-                    lat, lon = float(value[0]), float(value[1])
-                else:
-                    parts = str(value).replace(",", " ").split()
+            if isinstance(value, dict):
+                lat = next((value.get(k) for k in lat_keys if value.get(k) is not None), None)
+                lon = next((value.get(k) for k in lon_keys if value.get(k) is not None), None)
+                if lat is not None and lon is not None:
+                    lat, lon = float(lat), float(lon)
+                    if -90 <= lat <= 90 and -180 <= lon <= 180: return lat, lon
+            elif isinstance(value, str):
+                parts = value.replace(",", " ").split()
+                if len(parts) >= 2:
                     lat, lon = float(parts[0]), float(parts[1])
-                if -90 <= lat <= 90 and -180 <= lon <= 180: return lat, lon
-            except (TypeError, ValueError, IndexError): pass
+                    if -90 <= lat <= 90 and -180 <= lon <= 180: return lat, lon
+        except (TypeError, ValueError):
+            pass
+    try:
+        lat = next((payload.get(k) for k in lat_keys if payload.get(k) is not None), None)
+        lon = next((payload.get(k) for k in lon_keys if payload.get(k) is not None), None)
+        if lat is not None and lon is not None:
+            lat, lon = float(lat), float(lon)
+            if -90 <= lat <= 90 and -180 <= lon <= 180: return lat, lon
+    except (TypeError, ValueError):
+        pass
     return None, None
+
+
+@app.post("/api/forms/{form_id}/share")
+def create_or_enable_share(form_id: int) -> dict[str, Any]:
+    get_form_or_404(form_id)
+    with db_conn() as conn:
+        row = conn.execute("SELECT share_token FROM forms WHERE id=?", (form_id,)).fetchone()
+        token = row["share_token"] or uuid.uuid4().hex + uuid.uuid4().hex[:8]
+        conn.execute("UPDATE forms SET share_token=?, public_enabled=1 WHERE id=?", (token, form_id))
+    return {"ok": True, "form_id": form_id, "token": token, "enabled": True, "public_url": f"/public/{token}"}
+
+
+@app.put("/api/forms/{form_id}/share")
+def update_share(form_id: int, enabled: bool = True) -> dict[str, Any]:
+    get_form_or_404(form_id)
+    with db_conn() as conn:
+        row = conn.execute("SELECT share_token FROM forms WHERE id=?", (form_id,)).fetchone()
+        if enabled and not row["share_token"]:
+            token = uuid.uuid4().hex + uuid.uuid4().hex[:8]
+            conn.execute("UPDATE forms SET share_token=?, public_enabled=1 WHERE id=?", (token, form_id))
+        else:
+            conn.execute("UPDATE forms SET public_enabled=? WHERE id=?", (1 if enabled else 0, form_id))
+            token = row["share_token"]
+    return {"ok": True, "form_id": form_id, "token": token, "enabled": enabled,
+            "public_url": f"/public/{token}" if token and enabled else None}
+
+
+@app.get("/api/public/forms/{token}")
+def public_form(token: str) -> dict[str, Any]:
+    with db_conn() as conn:
+        row = conn.execute("SELECT * FROM forms WHERE share_token=? AND public_enabled=1", (token,)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Ce formulaire public n’est pas disponible.")
+    return form_to_dict(row)
+
+
+def _evaluate_relevant(expression: str, payload: dict[str, Any]) -> bool:
+    """Evaluate a constrained subset of XLSForm relevant expressions (no eval)."""
+    expr = str(expression or "").strip()
+    if not expr:
+        return True
+    clauses = re.split(r"\s+(and|or)\s+", expr.strip("() "), flags=re.IGNORECASE)
+    result: bool | None = None
+    operator = "and"
+    for part in clauses:
+        if part.lower() in ("and", "or"):
+            operator = part.lower()
+            continue
+        condition = part.strip().strip("() ")
+        match = re.fullmatch(r"not\s*\(\s*selected\s*\(\s*\$\{([^}]+)\}\s*,\s*['\"]([^'\"]+)['\"]\s*\)\s*\)", condition, re.IGNORECASE)
+        if match:
+            selected = payload.get(match.group(1), [])
+            selected = selected if isinstance(selected, list) else [selected]
+            value = match.group(2) not in [str(x) for x in selected]
+        else:
+            match = re.fullmatch(r"selected\s*\(\s*\$\{([^}]+)\}\s*,\s*['\"]([^'\"]+)['\"]\s*\)", condition, re.IGNORECASE)
+            if match:
+                selected = payload.get(match.group(1), [])
+                selected = selected if isinstance(selected, list) else [selected]
+                value = match.group(2) in [str(x) for x in selected]
+            else:
+                match = re.fullmatch(r"\$\{([^}]+)\}\s*(=|==|!=|>=|<=|>|<)\s*['\"]?([^'\"]*)['\"]?", condition)
+                if not match:
+                    # Unknown advanced XPath: treat as visible, then enforce requiredness.
+                    return True
+                actual = payload.get(match.group(1), "")
+                expected = match.group(3)
+                if isinstance(actual, list):
+                    actual = " ".join(str(x) for x in actual)
+                try:
+                    if match.group(2) in (">", "<", ">=", "<="):
+                        left, right = float(actual), float(expected)
+                    else:
+                        left, right = str(actual), str(expected)
+                except (TypeError, ValueError):
+                    left, right = str(actual), str(expected)
+                op = match.group(2)
+                value = {"=": left == right, "==": left == right, "!=": left != right,
+                         ">": left > right, "<": left < right, ">=": left >= right, "<=": left <= right}[op]
+        result = value if result is None else (result and value if operator == "and" else result or value)
+    return True if result is None else bool(result)
+
+
+@app.post("/api/public/forms/{token}/submissions")
+def create_public_submission(token: str, submission: SubmissionCreate) -> dict[str, Any]:
+    with db_conn() as conn:
+        row = conn.execute("SELECT id, schema_json FROM forms WHERE share_token=? AND public_enabled=1", (token,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Ce formulaire public n’est pas disponible.")
+    schema = json.loads(row["schema_json"])
+    # Basic server-side required field checks prevent empty public submissions.
+    for section in schema.get("sections", []):
+        for question in section.get("questions", []):
+            if question.get("required") and question.get("type") != "note":
+                if question.get("relevant") and not _evaluate_relevant(str(question.get("relevant")), submission.data):
+                    continue
+                val = submission.data.get(question.get("name"))
+                if val is None or val == "" or val == []:
+                    raise HTTPException(status_code=422, detail=f"Le champ « {question.get('label','question')} » est obligatoire.")
+                qtype = str(question.get("type") or "").lower()
+                options = question.get("options") or []
+                if qtype in ("select", "select_one") and val not in options:
+                    raise HTTPException(status_code=422, detail=f"Valeur non autorisée pour « {question.get('label','question')} ».")
+                if qtype in ("multiselect", "select_multiple"):
+                    vals = val if isinstance(val, list) else [val]
+                    if any(item not in options for item in vals):
+                        raise HTTPException(status_code=422, detail=f"Valeur non autorisée pour « {question.get('label','question')} ».")
+                if qtype == "number":
+                    try: float(val)
+                    except (TypeError, ValueError): raise HTTPException(status_code=422, detail=f"Une valeur numérique est attendue pour « {question.get('label','question')} ».")
+    sub_id = submission.id or str(uuid.uuid4())
+    submitted_at = submission.submitted_at or utc_now()
+    with db_conn() as conn:
+        try:
+            conn.execute("INSERT INTO submissions(id, form_id, payload_json, submitted_at) VALUES (?, ?, ?, ?)",
+                         (sub_id, int(row["id"]), json.dumps(submission.data, ensure_ascii=False), submitted_at))
+        except sqlite3.IntegrityError:
+            return {"ok": True, "id": sub_id, "submitted_at": submitted_at, "duplicate": True}
+    return {"ok": True, "id": sub_id, "submitted_at": submitted_at}
 
 
 def flatten_records(rows: list[dict[str, Any]]) -> tuple[list[str], list[list[str]]]:
