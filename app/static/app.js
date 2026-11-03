@@ -8,7 +8,7 @@
     settings: 'collectplus_settings_v1'
   };
   const state = {
-    forms: [], submissions: [], dashboard: null, view: 'dashboard', selectedFormId: null,
+    forms: [], submissions: [], dashboard: null, map: null, mapMarkers: [], view: 'dashboard', selectedFormId: null,
     builderQuestions: [], builderMode: 'create', selectedSubmissionForm: 'all', builderShortManual: false
   };
   const pageLabels = {dashboard:'Vue d’ensemble', forms:'Mes enquêtes', collect:'Nouvelle collecte', submissions:'Soumissions', reports:'Rapports & exports', settings:'Paramètres', builder:'Créer une enquête'};
@@ -132,10 +132,27 @@
     renderForms();
     renderCollectPicker();
     populateSubmissionFilter();
+    populateDashboardFormFilter();
+  }
+  function dashboardQuery() {
+    const period = $('#dashboardPeriod')?.value || '30';
+    const form = $('#dashboardForm')?.value || 'all';
+    const province = $('#dashboardProvince')?.value || 'all';
+    const params = new URLSearchParams();
+    if (period !== 'all') { const d = new Date(); d.setDate(d.getDate() - Number(period)); params.set('start_date', d.toISOString().slice(0,10)); }
+    if (form !== 'all') params.set('form_id', form);
+    if (province !== 'all') params.set('province', province);
+    return `/api/dashboard${params.toString() ? `?${params}` : ''}`;
+  }
+  function populateDashboardFormFilter() {
+    const select = $('#dashboardForm'); if (!select) return;
+    const selected = select.value || 'all';
+    select.innerHTML = '<option value="all">Toutes les enquêtes</option>' + state.forms.map(f => `<option value="${f.id}">${escapeHtml(f.short_title || f.title)}</option>`).join('');
+    if ([...select.options].some(o => o.value === selected)) select.value = selected;
   }
   async function loadDashboard() {
     try {
-      state.dashboard = await api('/api/dashboard');
+      state.dashboard = await api(dashboardQuery());
       renderDashboard(state.dashboard);
       $('#lastRefreshLabel').textContent = `Actualisé à ${new Intl.DateTimeFormat('fr-FR', {hour:'2-digit', minute:'2-digit'}).format(new Date())}`;
     } catch {
@@ -143,7 +160,7 @@
       const forms = state.forms;
       state.dashboard = {
         form_count: forms.length, submission_count: cached.length,
-        status_counts: {'Ouvert':0,'En cours':0,'Résolu':0}, disease_counts:{},
+        status_counts: {'Ouvert':0,'En cours':0,'Résolu':0}, disease_counts:{}, monthly:[], points:[],
         by_form: forms.map(f => ({label:f.short_title || f.title, value:cached.filter(s => s.form_id === f.id).length})), recent: cached.slice(0,7)
       };
       renderDashboard(state.dashboard);
@@ -201,6 +218,8 @@
     $('#metricResolved').textContent = statuses['Résolu'] ?? 0;
     renderStatusChart(statuses);
     renderFormChart(data.by_form || []);
+    renderSubmissionTrend(data.monthly || []);
+    renderCollectMap(data.points || []);
     renderRecent(data.recent || []);
     updateQueueIndicators();
   }
@@ -223,6 +242,30 @@
     const max = Math.max(1, ...visible.map(x => Number(x.value || 0)));
     root.innerHTML = visible.map(x => `<div class="bar-row"><div class="bar-label" title="${escapeHtml(x.label)}">${escapeHtml(x.label)}</div><div class="bar-track"><div class="bar-fill" style="width:${x.value ? Math.max(2, x.value/max*100) : 0}%"></div></div><div class="bar-value">${x.value}</div></div>`).join('');
   }
+  function renderSubmissionTrend(items) {
+    const root = $('#submissionTrend');
+    if (!items.length) { root.innerHTML = '<div class="chart-empty">Aucune donnée dans la période sélectionnée.</div>'; return; }
+    const values = items.map(x => Number(x.value || 0)); const max = Math.max(1, ...values);
+    const width = 640, height = 180, pad = 24;
+    const pts = values.map((v,i) => `${pad + (values.length===1 ? 0 : i*(width-2*pad)/(values.length-1))},${height-pad-(v/max)*(height-2*pad)}`).join(' ');
+    const area = `${pad},${height-pad} ${pts} ${width-pad},${height-pad}`;
+    root.innerHTML = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Tendance des soumissions" class="trend-svg"><defs><linearGradient id="trendFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#167d91" stop-opacity=".24"/><stop offset="100%" stop-color="#167d91" stop-opacity=".02"/></linearGradient></defs>${[.25,.5,.75,1].map(y=>`<line x1="${pad}" x2="${width-pad}" y1="${height-pad-y*(height-2*pad)}" y2="${height-pad-y*(height-2*pad)}" stroke="#e7edf1" stroke-dasharray="3 4"/>`).join('')}<polygon points="${area}" fill="url(#trendFill)"/><polyline points="${pts}" fill="none" stroke="#167d91" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>${values.map((v,i)=>{const x=pad+(values.length===1?0:i*(width-2*pad)/(values.length-1));const y=height-pad-(v/max)*(height-2*pad);return `<circle cx="${x}" cy="${y}" r="3.5" fill="#fff" stroke="#167d91" stroke-width="2"><title>${escapeHtml(items[i].label)} : ${v}</title></circle>`}).join('')}</svg><div class="trend-labels">${items.map(x=>`<span>${escapeHtml(x.label.slice(5) || x.label)}</span>`).join('')}</div>`;
+  }
+  function renderCollectMap(points) {
+    const root = $('#collectMap'); const count = $('#mapPointCount');
+    count.textContent = `${points.length} point${points.length===1?'':'s'} GPS`;
+    if (!window.L) { root.innerHTML = '<div class="map-empty">Carte en attente de la bibliothèque cartographique.</div>'; return; }
+    if (!state.map) { root.innerHTML=''; state.map = L.map(root, {zoomControl:true}).setView([-4.5,23.5], 4); L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:18,attribution:'© OpenStreetMap'}).addTo(state.map); }
+    state.mapMarkers.forEach(m=>state.map.removeLayer(m)); state.mapMarkers=[];
+    points.forEach(point=>{ const marker=L.circleMarker([point.lat,point.lon],{radius:7,color:'#fff',weight:2,fillColor:'#147d91',fillOpacity:.95}).addTo(state.map); marker.bindPopup(`<strong>${escapeHtml(point.title)}</strong><br>${escapeHtml(point.primary)}<br>${escapeHtml(point.province||'Province non renseignée')}<br>${escapeHtml(friendlyDate(point.submitted_at))}`);state.mapMarkers.push(marker); });
+    if(points.length){const group=L.featureGroup(state.mapMarkers);state.map.fitBounds(group.getBounds().pad(.2),{maxZoom:10});} else state.map.setView([-4.5,23.5],4);
+    setTimeout(()=>state.map.invalidateSize(),120);
+  }
+  $('#dashboardPeriod')?.addEventListener('change', loadDashboard);
+  $('#dashboardForm')?.addEventListener('change', loadDashboard);
+  $('#dashboardProvince')?.addEventListener('change', loadDashboard);
+  $('#dashboardRefresh')?.addEventListener('click', loadDashboard);
+
   function getStatus(data) {
     const status = data?.statut_incident || data?.status || '';
     if (status === 'Ouvert') return ['Ouvert','open'];
@@ -250,14 +293,36 @@
     $('#formCountLabel').textContent = `${forms.length} enquête${forms.length === 1 ? '' : 's'}`;
     $('#formsGrid').innerHTML = forms.map(form => `
       <article class="survey-card">
-        <div class="survey-card-top"><div class="survey-card-icon">▤</div><span class="survey-status">DISPONIBLE</span></div>
+        <div class="survey-card-top"><div class="survey-card-icon">▤</div><span class="survey-status">${form.public_enabled ? 'LIEN PUBLIC ACTIF' : 'DISPONIBLE'}</span></div>
         <h3>${escapeHtml(form.title)}</h3><p>${escapeHtml(form.description || 'Formulaire prêt à être utilisé pour la collecte de données.')}</p>
-        <div class="survey-card-bottom"><span class="survey-meta">${countQuestions(form)} questions · ${form.is_system ? 'Modèle intégré' : 'Personnalisé'}</span><div class="survey-actions"><button class="mini-action" data-preview-form="${form.id}">Aperçu</button><button class="mini-action primary-mini" data-start-form="${form.id}">Lancer</button>${form.is_system ? '' : `<button class="mini-action delete-mini" data-delete-form="${form.id}" title="Supprimer">×</button>`}</div></div>
+        <div class="survey-card-bottom"><span class="survey-meta">${countQuestions(form)} questions · ${form.is_system ? 'Modèle intégré' : 'Personnalisé'}</span><div class="survey-actions"><button class="mini-action" data-preview-form="${form.id}">Aperçu</button><button class="mini-action primary-mini" data-start-form="${form.id}">Lancer</button><button class="mini-action share-mini" data-share-form="${form.id}">${form.public_enabled ? 'Copier lien' : 'Partager sans compte'}</button>${form.public_enabled ? `<button class="mini-action close-share-mini" data-close-share="${form.id}">Fermer lien</button>` : ''}${form.is_system ? '' : `<button class="mini-action delete-mini" data-delete-form="${form.id}" title="Supprimer">×</button>`}</div></div>
       </article>`).join('');
     $('#formsEmpty').classList.toggle('hidden', forms.length > 0);
     $$('[data-start-form]').forEach(btn => btn.addEventListener('click', () => { state.selectedFormId = Number(btn.dataset.startForm); navigate('collect'); renderCollectPicker(); renderCollectForm(state.selectedFormId); }));
     $$('[data-preview-form]').forEach(btn => btn.addEventListener('click', () => previewForm(Number(btn.dataset.previewForm))));
     $$('[data-delete-form]').forEach(btn => btn.addEventListener('click', () => deleteForm(Number(btn.dataset.deleteForm))));
+    $$('[data-share-form]').forEach(btn => btn.addEventListener('click', () => shareForm(Number(btn.dataset.shareForm))));
+    $$('[data-close-share]').forEach(btn => btn.addEventListener('click', () => closePublicShare(Number(btn.dataset.closeShare))));
+  }
+  async function shareForm(formId) {
+    try {
+      const result = await api(`/api/forms/${formId}/publish`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:true})});
+      const link = new URL(result.public_url, window.location.origin).href;
+      showShareDialog(link, state.forms.find(f => Number(f.id) === Number(formId))?.title || 'Formulaire public');
+      try { await navigator.clipboard.writeText(link); toast('Lien public copié', 'success', 'Toute personne ayant ce lien peut répondre sans compte.'); } catch {}
+      await loadForms();
+    } catch (error) { toast('Impossible de publier le lien', 'error', error.message); }
+  }
+  function showShareDialog(link, title) {
+    let modal = $('#shareDialog');
+    if (!modal) { modal = document.createElement('div'); modal.id='shareDialog'; modal.className='modal-backdrop'; modal.innerHTML='<div class="modal-card share-dialog-card"><div class="modal-header"><div><div class="eyebrow">PARTAGE PARTICIPANT</div><h2 id="shareDialogTitle">Lien public</h2></div><button class="icon-button" id="shareDialogClose" aria-label="Fermer">×</button></div><div class="share-dialog-content"><p>Les participants peuvent ouvrir ce lien et envoyer une réponse <strong>sans créer de compte CollectPlus</strong>.</p><label class="share-link-label">Lien du formulaire<input id="shareLinkInput" readonly></label><div class="share-dialog-actions"><button class="button button-primary" id="shareCopyButton">Copier le lien</button><button class="button button-secondary" id="shareNativeButton">Partager…</button></div><div class="qr-wrap"><div id="shareQr"></div><span>QR code à scanner sur téléphone</span></div><p class="share-caution">Le lien est public et transmissible. Fermez-le depuis la fiche enquête lorsque la collecte est terminée.</p></div></div>'; document.body.appendChild(modal); $('#shareDialogClose').addEventListener('click',()=>modal.remove()); modal.addEventListener('click',e=>{if(e.target===modal)modal.remove()}); $('#shareCopyButton').addEventListener('click',async()=>{try{await navigator.clipboard.writeText($('#shareLinkInput').value);toast('Lien copié')}catch{$('#shareLinkInput').select();document.execCommand('copy');toast('Lien copié')}}); $('#shareNativeButton').addEventListener('click',async()=>{if(navigator.share){try{await navigator.share({title:$('#shareDialogTitle').textContent,url:$('#shareLinkInput').value})}catch{}}else{try{await navigator.clipboard.writeText($('#shareLinkInput').value);toast('Lien copié')}catch{}}}); }
+    $('#shareDialogTitle').textContent=title; $('#shareLinkInput').value=link; $('#shareQr').innerHTML='';
+    if (window.QRCode) new QRCode($('#shareQr'),{text:link,width:168,height:168,colorDark:'#142b4a',colorLight:'#ffffff',correctLevel:QRCode.CorrectLevel.M}); else $('#shareQr').innerHTML='<span class="hint-badge">QR code indisponible hors connexion</span>';
+  }
+  async function closePublicShare(formId) {
+    if (!confirm('Fermer ce lien public ? Les participants ne pourront plus soumettre de réponse avec ce lien.')) return;
+    try { await api(`/api/forms/${formId}/publish`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:false})}); toast('Lien public fermé'); await loadForms(); }
+    catch (error) { toast('Erreur lors de la fermeture', 'error', error.message); }
   }
   function countQuestions(form) { return (form.sections || []).reduce((sum, section) => sum + (section.questions || []).length, 0); }
   $('#formSearch').addEventListener('input', renderForms);
@@ -289,6 +354,8 @@
     }
     if (type === 'select' || type === 'select_one') {
       control = `<select class="question-control" name="${name}"${required}><option value="">Sélectionner…</option>${(q.options || []).map(option => `<option value="${escapeHtml(option)}">${escapeHtml(option)}</option>`).join('')}</select>`;
+    } else if (type === 'geopoint' || ['gps','location'].includes(String(q.name).toLowerCase())) {
+      control = `<div class="gps-field"><input class="question-control" type="text" name="${name}"${required} placeholder="latitude longitude altitude précision"><button type="button" class="button button-secondary small-button" data-capture-gps="${name}">⌖ GPS</button></div>`;
     } else if (type === 'multiselect' || type === 'select_multiple') {
       control = `<div class="choice-list">${(q.options || []).map((option, i) => `<label class="choice-option"><input type="checkbox" name="${name}" value="${escapeHtml(option)}"><span>${escapeHtml(option)}</span></label>`).join('')}</div>`;
       if (q.required) control += `<input type="text" class="multi-required-proxy" name="${name}__required" required tabindex="-1" aria-hidden="true" style="position:absolute;width:1px;height:1px;opacity:0;pointer-events:none">`;
@@ -309,6 +376,12 @@
       <div class="collect-form-footer"><div class="form-footer-note">* Champ obligatoire · Enregistrement local si hors ligne</div><div class="form-footer-buttons"><button class="button button-secondary" type="button" id="resetSurveyButton">Effacer</button><button class="button button-primary" type="submit">Enregistrer la réponse <span>→</span></button></div></div>
     </form>`;
     const surveyForm = $('#activeSurveyForm');
+    $$('[data-capture-gps]', surveyForm).forEach(button => button.addEventListener('click', () => {
+      const field = surveyForm.elements.namedItem(button.dataset.captureGps);
+      if (!navigator.geolocation) { toast('GPS indisponible sur ce navigateur', 'error'); return; }
+      button.disabled = true; button.textContent = 'Recherche…';
+      navigator.geolocation.getCurrentPosition(pos => { field.value = [pos.coords.latitude,pos.coords.longitude,pos.coords.altitude ?? '',pos.coords.accuracy].join(' '); button.disabled=false;button.textContent='✓ GPS';updateFormProgress(); }, () => { toast('Autorisez la localisation puis réessayez', 'error');button.disabled=false;button.textContent='⌖ GPS'; }, {enableHighAccuracy:true,timeout:20000});
+    }));
     $$('.question-field input, .question-field select, .question-field textarea', surveyForm).forEach(input => {
       if (input.type === 'date' && input.name === 'date_declaration' && !input.value) input.value = new Date().toISOString().slice(0,10);
       input.addEventListener('input', updateFormProgress);

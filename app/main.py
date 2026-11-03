@@ -12,7 +12,7 @@ from typing import Any
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from openpyxl import Workbook, load_workbook
 from pydantic import BaseModel, Field
@@ -26,8 +26,8 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(
     title="CollectPlus",
-    version="0.3.0",
-    description="Plateforme de collecte mobile et de visualisation des enquêtes.",
+    version="0.4.0",
+    description="Plateforme de collecte mobile, partage public anonyme, cartographie GPS et tableaux de bord dynamiques.",
 )
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -143,6 +143,12 @@ def init_db() -> None:
             created_at TEXT NOT NULL,
             is_system INTEGER NOT NULL DEFAULT 0
         )""")
+        # Backward-compatible migrations for form sharing.
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(forms)").fetchall()}
+        if "public_token" not in columns:
+            conn.execute("ALTER TABLE forms ADD COLUMN public_token TEXT")
+        if "public_enabled" not in columns:
+            conn.execute("ALTER TABLE forms ADD COLUMN public_enabled INTEGER NOT NULL DEFAULT 0")
         conn.execute("""CREATE TABLE IF NOT EXISTS submissions (
             id TEXT PRIMARY KEY,
             form_id INTEGER NOT NULL,
@@ -167,6 +173,8 @@ def form_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     schema["id"] = row["id"]
     schema["created_at"] = row["created_at"]
     schema["is_system"] = bool(row["is_system"])
+    schema["public_enabled"] = bool(row["public_enabled"]) if "public_enabled" in row.keys() else False
+    schema["public_token"] = row["public_token"] if "public_token" in row.keys() else None
     return schema
 
 
@@ -201,6 +209,66 @@ def on_startup() -> None:
 @app.get("/")
 def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
+
+
+@app.get("/p/{token}")
+def public_form_page(token: str) -> FileResponse:
+    with db_conn() as conn:
+        row = conn.execute("SELECT id FROM forms WHERE public_token=? AND public_enabled=1", (token,)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Ce formulaire public est indisponible ou a été fermé.")
+    return FileResponse(STATIC_DIR / "public.html")
+
+
+@app.get("/api/public/forms/{token}")
+def get_public_form(token: str) -> dict[str, Any]:
+    with db_conn() as conn:
+        row = conn.execute("SELECT * FROM forms WHERE public_token=? AND public_enabled=1", (token,)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Formulaire public indisponible")
+    schema = form_to_dict(row)
+    # Do not expose management fields or internal form database identifiers to respondents.
+    return {"key": schema.get("key"), "title": schema.get("title"), "short_title": schema.get("short_title"), "description": schema.get("description"), "sections": schema.get("sections", [])}
+
+
+@app.post("/api/public/forms/{token}/submissions")
+def submit_public_form(token: str, submission: dict[str, Any]) -> dict[str, Any]:
+    with db_conn() as conn:
+        row = conn.execute("SELECT * FROM forms WHERE public_token=? AND public_enabled=1", (token,)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Formulaire public indisponible")
+    schema = form_to_dict(row)
+    data = submission.get("data")
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=422, detail="Les réponses doivent être fournies sous forme d'objet.")
+    # Honeypot field: silently acknowledge automated spam without storing it.
+    if str(data.get("website", "")).strip():
+        return {"ok": True, "id": str(uuid.uuid4()), "submitted_at": utc_now(), "message": "Votre réponse a été enregistrée."}
+    # Enforce required questions server-side as well as in the public browser form.
+    for section in schema.get("sections", []):
+        for question in section.get("questions", []):
+            if question.get("required") and not question.get("type") == "note":
+                value = data.get(question.get("name"))
+                if value is None or value == "" or value == []:
+                    raise HTTPException(status_code=422, detail=f"Réponse obligatoire manquante : {question.get('label', question.get('name'))}")
+    sub_id = str(uuid.uuid4())
+    submitted_at = utc_now()
+    data["_submission_channel"] = "public_link_anonymous"
+    with db_conn() as conn:
+        conn.execute("INSERT INTO submissions(id, form_id, payload_json, submitted_at) VALUES (?, ?, ?, ?)", (sub_id, row["id"], json.dumps(data, ensure_ascii=False), submitted_at))
+    return {"ok": True, "id": sub_id, "submitted_at": submitted_at, "message": "Votre réponse a été enregistrée."}
+
+
+@app.post("/api/forms/{form_id}/publish")
+def publish_form(form_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+    enabled = bool(payload.get("enabled", True))
+    with db_conn() as conn:
+        row = conn.execute("SELECT id, public_token FROM forms WHERE id=?", (form_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Enquête introuvable")
+        token = row["public_token"] or uuid.uuid4().hex + uuid.uuid4().hex[:16]
+        conn.execute("UPDATE forms SET public_token=?, public_enabled=? WHERE id=?", (token, int(enabled), form_id))
+    return {"form_id": form_id, "public_enabled": enabled, "public_token": token, "public_url": f"/p/{token}" if enabled else None}
 
 
 @app.get("/manifest.webmanifest")
@@ -442,36 +510,67 @@ def list_submissions(form_id: int | None = None) -> list[dict[str, Any]]:
 
 
 @app.get("/api/dashboard")
-def dashboard() -> dict[str, Any]:
-    with db_conn() as conn:
-        form_count = conn.execute("SELECT COUNT(*) FROM forms").fetchone()[0]
-        submission_count = conn.execute("SELECT COUNT(*) FROM submissions").fetchone()[0]
-        recent = conn.execute("""SELECT s.id, s.form_id, s.payload_json, s.submitted_at, f.short_title
-                                FROM submissions s JOIN forms f ON f.id=s.form_id ORDER BY s.submitted_at DESC LIMIT 7""").fetchall()
-        by_form = conn.execute("""SELECT f.short_title, COUNT(s.id) AS n FROM forms f LEFT JOIN submissions s ON s.form_id=f.id
-                               GROUP BY f.id ORDER BY n DESC, f.id ASC""").fetchall()
-        all_payloads = conn.execute("SELECT payload_json FROM submissions").fetchall()
+def dashboard(start_date: str | None = None, end_date: str | None = None, form_id: int | None = None, province: str | None = None) -> dict[str, Any]:
+    records = read_submissions(form_id)
+    filtered = []
+    for rec in records:
+        date_part = str(rec.get("submitted_at", ""))[:10]
+        if start_date and date_part < start_date: continue
+        if end_date and date_part > end_date: continue
+        if province and province != "all":
+            pv = str(rec.get("data", {}).get("province", ""))
+            if pv.casefold() != province.casefold(): continue
+        filtered.append(rec)
+    all_forms = list_forms()
     statuses: dict[str, int] = {"Ouvert": 0, "En cours": 0, "Résolu": 0}
     disease_counts: dict[str, int] = {}
-    for row in all_payloads:
-        payload = json.loads(row["payload_json"])
-        status = payload.get("statut_incident")
-        if status in statuses:
-            statuses[status] += 1
+    by_form_counts: dict[str, int] = {}
+    monthly: dict[str, int] = {}
+    points: list[dict[str, Any]] = []
+    for rec in filtered:
+        payload = rec["data"]
+        status = payload.get("statut_incident") or payload.get("status")
+        if status in statuses: statuses[status] += 1
         diseases = payload.get("maladie_echantillon", [])
-        if isinstance(diseases, str):
-            diseases = [diseases]
+        if isinstance(diseases, str): diseases = [diseases]
         if isinstance(diseases, list):
-            for disease in diseases:
-                disease_counts[str(disease)] = disease_counts.get(str(disease), 0) + 1
+            for disease in diseases: disease_counts[str(disease)] = disease_counts.get(str(disease), 0) + 1
+        title = rec.get("short_title") or rec.get("form_title") or "Enquête"
+        by_form_counts[title] = by_form_counts.get(title, 0) + 1
+        month = str(rec.get("submitted_at", ""))[:7]
+        if month: monthly[month] = monthly.get(month, 0) + 1
+        lat, lon = extract_coordinates(payload)
+        if lat is not None and lon is not None:
+            points.append({"id": rec["id"], "lat": lat, "lon": lon, "title": title, "submitted_at": rec["submitted_at"], "province": payload.get("province", ""), "primary": payload.get("reference_incident") or payload.get("name") or rec["id"][:8]})
     return {
-        "form_count": form_count,
-        "submission_count": submission_count,
-        "status_counts": statuses,
+        "form_count": len(all_forms), "submission_count": len(filtered), "status_counts": statuses,
         "disease_counts": disease_counts,
-        "by_form": [{"label": r["short_title"], "value": r["n"]} for r in by_form],
-        "recent": [{"id": r["id"], "form_id": r["form_id"], "form_title": r["short_title"], "data": json.loads(r["payload_json"]), "submitted_at": r["submitted_at"]} for r in recent],
+        "by_form": [{"label": k, "value": v} for k, v in sorted(by_form_counts.items(), key=lambda x: -x[1])],
+        "monthly": [{"label": k, "value": v} for k, v in sorted(monthly.items())],
+        "points": points, "recent": filtered[:7],
+        "filter_context": {"start_date": start_date, "end_date": end_date, "form_id": form_id, "province": province}
     }
+
+
+def extract_coordinates(payload: dict[str, Any]) -> tuple[float | None, float | None]:
+    # Supports explicit latitude/longitude fields and common XLSForm geopoint representations.
+    for lat_key, lon_key in (("latitude", "longitude"), ("lat", "lon"), ("gps_latitude", "gps_longitude")):
+        try:
+            if payload.get(lat_key) is not None and payload.get(lon_key) is not None:
+                lat, lon = float(payload[lat_key]), float(payload[lon_key])
+                if -90 <= lat <= 90 and -180 <= lon <= 180: return lat, lon
+        except (TypeError, ValueError): pass
+    for key, value in payload.items():
+        if str(key).lower() in ("location", "geopoint", "gps", "point_gps", "position"):
+            try:
+                if isinstance(value, (list, tuple)) and len(value) >= 2:
+                    lat, lon = float(value[0]), float(value[1])
+                else:
+                    parts = str(value).replace(",", " ").split()
+                    lat, lon = float(parts[0]), float(parts[1])
+                if -90 <= lat <= 90 and -180 <= lon <= 180: return lat, lon
+            except (TypeError, ValueError, IndexError): pass
+    return None, None
 
 
 def flatten_records(rows: list[dict[str, Any]]) -> tuple[list[str], list[list[str]]]:

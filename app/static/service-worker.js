@@ -1,5 +1,5 @@
-const CACHE_NAME = 'collectplus-shell-v3';
-const SHELL = ['/', '/static/styles.css', '/static/app.js', '/static/icon.svg', '/static/default-forms.json', '/manifest.webmanifest'];
+const CACHE_NAME = 'collectplus-shell-v4';
+const SHELL = ['/', '/static/styles.css', '/static/app.js', '/static/icon.svg', '/static/default-forms.json', '/static/public.html', '/manifest.webmanifest'];
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(SHELL)).then(() => self.skipWaiting()));
 });

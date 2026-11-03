@@ -1,4 +1,4 @@
-# CollectPlus 0.3.0 — Collecte et analyse
+# CollectPlus v0.4.0 — Collecte, partage public et analyse dynamique
 
 CollectPlus est une première version exécutable d’une application de collecte de données inspirée des outils de formulaires de terrain. Elle comprend une interface web responsive, un formulaire MAPEPI préchargé, un créateur de formulaires, l’importation de certains XLSForm/JSON, une file de soumissions hors ligne dans le navigateur, une synchronisation vers une base SQLite et des exports CSV, Excel et JSON.
 
@@ -29,7 +29,22 @@ Puis ouvrez http://127.0.0.1:8000. Le volume `./data` conserve la base quand le 
 - La prise en charge PWA (mise sur l’écran d’accueil et cache de la coque de l’application) nécessite un navigateur compatible. Le service worker est généralement disponible sur `localhost` ou en HTTPS. Pour une installation publique, configurez un nom de domaine et HTTPS.
 - Les réponses saisies quand le serveur est indisponible sont gardées dans le stockage local du navigateur et peuvent être renvoyées lorsque le serveur redevient joignable. Évitez d’effacer les données du navigateur avant synchronisation.
 
-## Fonctionnalités incluses
+## Fonctionnalités incluses — version 0.4.0
+
+- Dashboard enrichi : filtres de période, formulaire et province; courbe mensuelle de collecte; indicateurs actualisés via l’API.
+- Cartographie Leaflet/OpenStreetMap des points GPS reçus depuis les champs `latitude`/`longitude`, `lat`/`lon` ou les champs `location`/`geopoint` (format lat lon altitude précision). Les coordonnées doivent être réellement renseignées dans les réponses.
+- Partage de formulaire public sans compte participant : depuis « Mes enquêtes », bouton **Partager sans compte**; un jeton URL aléatoire est créé et copié. La page publique est mobile-responsive, vérifie les questions requises et envoie les réponses dans la même base. Le propriétaire peut **fermer le lien public**.
+- Capture GPS depuis le navigateur sur les champs `geopoint` dans le formulaire public et la collecte interne (permission de localisation requise).
+- Nouvelle palette bleu nuit / turquoise / vert menthe et cache PWA versionné.
+
+### Partage public : parcours rapide
+
+1. Ouvrir **Mes enquêtes** dans CollectPlus.
+2. Sur le formulaire, cliquer **Partager sans compte**.
+3. Copier et diffuser le lien (participants n’ont pas besoin d’un compte CollectPlus).
+4. Les réponses soumises apparaissent dans **Soumissions**, les exports et les analyses du dashboard.
+5. Pour arrêter la collecte par ce lien, cliquer **Fermer lien**. Le jeton est conservé mais désactivé; la publication peut être rouverte.
+
 
 - Tableau de bord avec compteurs et graphiques, alimentés uniquement par les soumissions réelles.
 - Formulaire « Fiche d’enregistrement et de suivi d’incident » adapté du document MAPEPI transmis : identification, étape du circuit, motifs, maladie/échantillon, impact/traçabilité, notification, mesures immédiates et correctives, clôture.
@@ -40,9 +55,9 @@ Puis ouvrez http://127.0.0.1:8000. Le volume `./data` conserve la base quand le 
 
 ## Limites importantes de cette version
 
-Cette livraison est un **MVP local prêt à lancer**, avec un workflow GitHub Actions permettant de compiler automatiquement un APK Android de test. L'APK n'est pas précompilé dans l'archive : il est produit par GitHub Actions après publication du code et lancement du workflow. Elle n’intègre pas encore les comptes utilisateurs, les rôles, les permissions multi-organisation, le chiffrement de bout en bout, le contrôle d’accès côté serveur, ni une infrastructure de sauvegardes automatisées. Les préférences visuelles sont stockées dans le navigateur. La synchronisation hors ligne utilise `localStorage` et non une base mobile chiffrée.
+Cette livraison est une **version de développement fonctionnelle v0.4.0**, avec workflow GitHub Actions pour compiler un APK Android de test. L'APK n'est pas précompilé dans l'archive : il est produit par GitHub Actions après publication du code et lancement du workflow. Elle n’intègre pas encore l’authentification des administrateurs, les rôles/permissions, la protection d’administration des endpoints, une limitation anti-spam distribuée, le chiffrement de bout en bout, ni une infrastructure de sauvegardes automatisées. Le lien public est un jeton porteur : toute personne qui le possède peut soumettre tant qu’il est activé. Les préférences visuelles sont stockées dans le navigateur. La synchronisation hors ligne utilise `localStorage` et non une base mobile chiffrée.
 
-**Ne publiez pas ce serveur directement sur Internet et n’y entrez pas de données personnelles ou médicales identifiantes en production avant d’ajouter une authentification forte, des droits d’accès, HTTPS, des sauvegardes testées et les protections de confidentialité requises.** Utilisez d’abord les données de test.
+**Ne déployez pas cette version telle quelle avec des données personnelles ou médicales identifiantes en production. Avant ouverture réelle, ajoutez une authentification forte pour les gestionnaires, contrôle d’accès serveur, limitation de débit, audit, HTTPS, sauvegardes testées, politique de confidentialité et gestion des consentements. Le partage anonyme sans compte répondant est fonctionnel mais nécessite supervision et protection anti-abus renforcées.** Utilisez d’abord des données de test.
 
 ## API utile
 
@@ -52,7 +67,10 @@ Cette livraison est un **MVP local prêt à lancer**, avec un workflow GitHub Ac
 - `POST /api/forms/import` — importer XLSForm/JSON.
 - `POST /api/submissions` — enregistrer une soumission.
 - `GET /api/submissions` — consulter les soumissions.
-- `GET /api/dashboard` — agrégats pour le tableau de bord.
+- `GET /api/dashboard?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD&form_id=ID&province=Province` — agrégats et points GPS filtrés.
+- `POST /api/forms/{form_id}/publish` — activer ou désactiver le lien participant.
+- `GET /p/{token}` — formulaire public anonyme (si activé).
+- `GET /api/public/forms/{token}` et `POST /api/public/forms/{token}/submissions` — consulter le schéma public et soumettre sans compte.
 - `GET /api/export/csv`, `/api/export/xlsx`, `/api/export/json` — exports.
 
 La documentation interactive de l’API est accessible sur **http://127.0.0.1:8000/docs** après démarrage.
@@ -118,7 +136,3 @@ Le workflow `.github/workflows/build-apk.yml` compile l'application Android et p
 5. Attendez que l'exécution soit terminée avec une coche verte. Ouvrez l'exécution, puis téléchargez l'artefact **CollectPlus-Android-APK** dans la section **Artifacts**. Décompressez l'archive téléchargée pour récupérer `app-debug.apk`.
 
 Cette compilation produit un APK **debug destiné aux tests**, non signé pour une distribution de production. Le paquet Android contient l'interface mobile ; l'API Python et sa base de données doivent toujours fonctionner sur un serveur accessible pour les fonctions de synchronisation.
-
-
-## Version 0.3.0
-Cette version apporte une refonte visuelle du tableau de bord, une prévisualisation cartographique schématique et une actualisation du cache PWA. La carte est illustrative : elle ne remplace pas une couche géographique officielle. Consultez `CHANGELOG.md`.
