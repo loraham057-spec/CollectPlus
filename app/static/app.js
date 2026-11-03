@@ -9,9 +9,9 @@
   };
   const state = {
     forms: [], submissions: [], dashboard: null, view: 'dashboard', selectedFormId: null,
-    builderQuestions: [], builderMode: 'create', selectedSubmissionForm: 'all', builderShortManual: false, dashboardMap: null, fullMap: null, mapMarkers: [], fullMapMarkers: []
+    builderQuestions: [], builderMode: 'create', selectedSubmissionForm: 'all', builderShortManual: false
   };
-  const pageLabels = {dashboard:'Vue d’ensemble', forms:'Mes enquêtes', collect:'Nouvelle collecte', submissions:'Soumissions', reports:'Rapports & exports', sharing:'Partage public', map:'Cartographie', settings:'Paramètres', builder:'Créer une enquête'};
+  const pageLabels = {dashboard:'Vue d’ensemble', forms:'Mes enquêtes', collect:'Nouvelle collecte', submissions:'Soumissions', reports:'Rapports & exports', settings:'Paramètres', builder:'Créer une enquête'};
 
   function readLS(key, fallback) {
     try { const value = localStorage.getItem(key); return value ? JSON.parse(value) : fallback; }
@@ -135,85 +135,22 @@
   }
   async function loadDashboard() {
     try {
-      const period = $('#dashboardPeriod')?.value || '30';
-      const form = $('#dashboardForm')?.value || 'all';
-      const province = $('#dashboardProvince')?.value || 'all';
-      const params = new URLSearchParams({period, province});
-      if (form !== 'all') params.set('form_id', form);
-      state.dashboard = await api(`/api/dashboard?${params.toString()}`);
+      state.dashboard = await api('/api/dashboard');
       renderDashboard(state.dashboard);
-      populateDashboardFilters(state.dashboard);
       $('#lastRefreshLabel').textContent = `Actualisé à ${new Intl.DateTimeFormat('fr-FR', {hour:'2-digit', minute:'2-digit'}).format(new Date())}`;
     } catch {
       const cached = readLS(LS.submissions, []);
       const forms = state.forms;
-      state.dashboard = {form_count:forms.length, submission_count:cached.length,
-        status_counts:{'Ouvert':0,'En cours':0,'Résolu':0}, disease_counts:{},
-        by_form:forms.map(f=>({label:f.short_title||f.title,value:cached.filter(s=>s.form_id===f.id).length})), recent:cached.slice(0,7), points:[], daily_counts:[], provinces:[]};
+      state.dashboard = {
+        form_count: forms.length, submission_count: cached.length,
+        status_counts: {'Ouvert':0,'En cours':0,'Résolu':0}, disease_counts:{},
+        by_form: forms.map(f => ({label:f.short_title || f.title, value:cached.filter(s => s.form_id === f.id).length})), recent: cached.slice(0,7)
+      };
       renderDashboard(state.dashboard);
       $('#lastRefreshLabel').textContent = 'Données en cache (mode hors ligne)';
     }
   }
-
-  function populateDashboardFilters(data) {
-    const formSelect=$('#dashboardForm'), mapFormSelect=$('#mapFormFilter'), provinceSelect=$('#dashboardProvince');
-    if(formSelect && formSelect.options.length<=1){
-      const opts=state.forms.map(f=>`<option value="${f.id}">${escapeHtml(f.short_title||f.title)}</option>`).join('');
-      formSelect.insertAdjacentHTML('beforeend',opts);
-      if(mapFormSelect) mapFormSelect.insertAdjacentHTML('beforeend',opts);
-      const shareSelect=$('#shareFormSelect');
-      if(shareSelect) shareSelect.innerHTML=state.forms.map(f=>`<option value="${f.id}">${escapeHtml(f.short_title||f.title)}</option>`).join('');
-    }
-    if(provinceSelect && data.provinces){
-      const current=provinceSelect.value||'all';
-      provinceSelect.innerHTML='<option value="all">Toutes les provinces</option>'+data.provinces.map(p=>`<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join('');
-      if([...provinceSelect.options].some(o=>o.value===current)) provinceSelect.value=current;
-    }
-    renderSharingForms();
-  }
-
-  function initMap(targetId, full=false) {
-    if(!window.L) return null;
-    const target=$(`#${targetId}`);
-    if(!target) return null;
-    if(target._leaflet_id) return full?state.fullMap:state.dashboardMap;
-    const map=L.map(targetId,{scrollWheelZoom:false}).setView([-4.3,21.8],4.4);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:18,attribution:'© OpenStreetMap'}).addTo(map);
-    if(full) state.fullMap=map; else state.dashboardMap=map;
-    return map;
-  }
-
-  function renderMapPoints(points, full=false) {
-    const map=initMap(full?'fullMap':'dashboardMap',full);
-    const markerArray=full?state.fullMapMarkers:state.mapMarkers;
-    if(!map) return;
-    markerArray.forEach(m=>map.removeLayer(m)); markerArray.length=0;
-    (points||[]).forEach(point=>{
-      const lat=Number(point.latitude),lon=Number(point.longitude);
-      if(!Number.isFinite(lat)||!Number.isFinite(lon)) return;
-      const marker=L.circleMarker([lat,lon],{radius:7,color:'#fff',weight:2,fillColor:'#0799a6',fillOpacity:.95}).addTo(map);
-      marker.bindPopup(`<strong>${escapeHtml(point.form_title||'Soumission')}</strong><br>${escapeHtml(point.province||'Province non renseignée')}<br>${escapeHtml(friendlyDate(point.submitted_at))}`);
-      markerArray.push(marker);
-    });
-    if(markerArray.length){
-      const bounds=L.featureGroup(markerArray).getBounds();
-      map.fitBounds(bounds.pad(.18),{maxZoom:12});
-    } else map.setView([-4.3,21.8],4.4);
-    if(full) $('#fullMapSummary').textContent=`${markerArray.length} point(s) GPS affiché(s)`;
-    else $('#mapPointCount').textContent=`${markerArray.length} point(s)`;
-    setTimeout(()=>map.invalidateSize(),100);
-  }
-
-  function renderTrend(daily) {
-    const host=$('#submissionTrend'); if(!host) return;
-    const items=(daily||[]).slice(-14);
-    if(!items.length){host.innerHTML='<div class="empty-cell">Aucune soumission sur la période sélectionnée.</div>';$('#trendSummary').textContent='';return;}
-    const max=Math.max(1,...items.map(x=>Number(x.value)||0));
-    host.innerHTML=items.map(item=>`<div class="trend-bar-wrap" title="${escapeHtml(item.date)} : ${item.value}"><div class="trend-bar" style="height:${Math.max(2,(Number(item.value)||0)/max*90)}%"></div><small>${escapeHtml(item.date.slice(5))}</small></div>`).join('');
-    const total=items.reduce((sum,x)=>sum+(Number(x.value)||0),0);
-    $('#trendSummary').textContent=`${total.toLocaleString('fr-FR')} soumission(s) sur ${items.length} jour(s) avec activité`;
-  }
-async function loadSubmissions() {
+  async function loadSubmissions() {
     try {
       state.submissions = await api('/api/submissions');
       writeLS(LS.submissions, state.submissions);
@@ -222,6 +159,7 @@ async function loadSubmissions() {
     }
     renderSubmissions();
     renderReportSummary();
+    if (state.view === 'dashboard' && state.dashboard) renderDashboard(state.dashboard);
   }
   async function refreshAll() {
     await loadForms();
@@ -237,8 +175,6 @@ async function loadSubmissions() {
     $('#currentPageLabel').textContent = pageLabels[view] || 'CollectPlus';
     $('#sidebar').classList.remove('mobile-open');
     if (view === 'dashboard') loadDashboard();
-    if (view === 'sharing') renderSharingForms();
-    if (view === 'map') loadFullMap();
     if (view === 'forms') renderForms();
     if (view === 'collect') renderCollectPicker();
     if (view === 'submissions') loadSubmissions();
@@ -258,20 +194,92 @@ async function loadSubmissions() {
   }
   function closeAbout() { $('#aboutModal').classList.add('hidden'); }
 
-  function renderDashboard(data) {
-    $('#metricForms').textContent=data.form_count??state.forms.length;
-    $('#metricSubmissions').textContent=data.submission_count??state.submissions.length;
-    const statuses=data.status_counts||{};
-    $('#metricOpen').textContent=statuses['Ouvert']??0;
-    $('#metricResolved').textContent=statuses['Résolu']??0;
-    const geoCount=(data.points||[]).length;
-    const geoMetric=$('#metricGeo'); if(geoMetric) geoMetric.textContent=geoCount;
-    const geoRate=$('#metricGeoRate'); if(geoRate) geoRate.textContent=`${data.submission_count?Math.round(geoCount/data.submission_count*100):0}% du total`;
-    renderStatusChart(statuses); renderFormChart(data.by_form||[]); renderRecent(data.recent||[]);
-    renderMapPoints(data.points||[],false); renderTrend(data.daily_counts||[]);
-    updateQueueIndicators();
+  let cpMapInstance = null;
+  let cpMapMarkers = [];
+  const cpColors = ['#0878f9','#08b982','#ff9d25','#f35e66','#8a5cf6','#12b8c8','#a3b2c4'];
+  function cpEscape(s){return escapeHtml(String(s ?? ''));}
+  function cpGetGps(record){
+    const d=record?.data||{};
+    const candidates=[d.gps,d.geolocation,d.location,d.coordonnees_gps,d.coordinates,d.position];
+    let lat=d.latitude??d.lat??d.latitud, lon=d.longitude??d.lon??d.lng??d.longitud;
+    for(const c of candidates){
+      if(Array.isArray(c)&&c.length>=2){
+        const a=Number(c[0]),b=Number(c[1]); if(Number.isFinite(a)&&Number.isFinite(b)){if(Math.abs(a)<=90&&Math.abs(b)<=180){lat=a;lon=b;}else{lat=b;lon=a;}break;}
+      }
+      if(typeof c==='string'){const m=c.match(/(-?\d{1,2}\.\d+)\s*[,; ]\s*(-?\d{1,3}\.\d+)/);if(m){lat=Number(m[1]);lon=Number(m[2]);break;}}
+      if(c&&typeof c==='object'){lat=c.latitude??c.lat??lat;lon=c.longitude??c.lng??c.lon??lon;}
+    }
+    lat=Number(lat);lon=Number(lon);return Number.isFinite(lat)&&Number.isFinite(lon)&&Math.abs(lat)<=90&&Math.abs(lon)<=180?[lat,lon]:null;
   }
-
+  function cpDate(record){const d=new Date(record?.submitted_at||record?.date||0);return Number.isFinite(d.getTime())?d:null;}
+  function cpFilteredRows(){
+    const period=$('#cpPeriodFilter')?.value||'30', province=$('#cpProvinceFilter')?.value||'all', form=$('#cpFormFilter')?.value||'all';
+    let rows=Array.isArray(state.submissions)?state.submissions:[];
+    if(form!=='all')rows=rows.filter(r=>String(r.form_id)===String(form));
+    if(province!=='all')rows=rows.filter(r=>String((r.data||{}).province||'')===province);
+    if(period!=='all'){const days=Number(period),since=new Date();since.setDate(since.getDate()-days);rows=rows.filter(r=>{const d=cpDate(r);return d&&d>=since;});}
+    return rows;
+  }
+  function cpPopulateFilters(){
+    const prov=$('#cpProvinceFilter'), form=$('#cpFormFilter');if(!prov||!form)return;
+    const oldProv=prov.value,oldForm=form.value;
+    const provinces=[...new Set((state.submissions||[]).map(r=>(r.data||{}).province).filter(x=>typeof x==='string'&&x.trim()))].sort((a,b)=>a.localeCompare(b,'fr'));
+    prov.innerHTML='<option value="all">Toutes les provinces</option>'+provinces.map(x=>`<option value="${cpEscape(x)}">${cpEscape(x)}</option>`).join('');
+    form.innerHTML='<option value="all">Tous les formulaires</option>'+state.forms.map(f=>`<option value="${cpEscape(f.id)}">${cpEscape(f.short_title||f.title)}</option>`).join('');
+    if([...prov.options].some(o=>o.value===oldProv))prov.value=oldProv;if([...form.options].some(o=>o.value===oldForm))form.value=oldForm;
+  }
+  function cpRenderTrend(rows){
+    const root=$('#cpTrendChart');if(!root)return;
+    const buckets=new Map();const gran=$('#cpTrendGranularity')?.value||'day';
+    rows.forEach(r=>{const d=cpDate(r);if(!d)return;let key;if(gran==='month')key=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');else if(gran==='week'){const w=new Date(d);w.setDate(w.getDate()-((w.getDay()+6)%7));key=w.toISOString().slice(0,10);}else key=d.toISOString().slice(0,10);buckets.set(key,(buckets.get(key)||0)+1);});
+    let arr=[...buckets.entries()].sort((a,b)=>a[0].localeCompare(b[0]));if(arr.length>14)arr=arr.slice(-14);
+    if(!arr.length){root.innerHTML='<div class="cp-empty-mini">Le graphique se construira après les premières soumissions.<br>Les valeurs ne sont pas simulées.</div>';return;}
+    const W=600,H=225,L=34,R=12,T=14,B=32,iw=W-L-R,ih=H-T-B,max=Math.max(1,...arr.map(x=>x[1]));const points=arr.map((x,i)=>`${L+(arr.length===1?iw/2:i*iw/(arr.length-1))},${T+ih-(x[1]/max)*ih}`).join(' ');
+    const grids=[0,.25,.5,.75,1].map(v=>{const y=T+ih-v*ih;return `<line x1="${L}" y1="${y}" x2="${W-R}" y2="${y}" stroke="#e8eff8"/><text x="${L-7}" y="${y+3}" text-anchor="end" fill="#8293ad" font-size="10">${Math.round(max*v)}</text>`}).join('');
+    const labels=arr.map((x,i)=>{if(arr.length>8&&i%2) return '';const xx=L+(arr.length===1?iw/2:i*iw/(arr.length-1));return `<text x="${xx}" y="${H-8}" text-anchor="middle" fill="#8494ad" font-size="9">${cpEscape(x[0].slice(5))}</text>`}).join('');
+    root.innerHTML=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Évolution des soumissions">${grids}<polyline points="${points}" fill="none" stroke="#0878f9" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>${arr.map((x,i)=>{const xx=L+(arr.length===1?iw/2:i*iw/(arr.length-1)),yy=T+ih-(x[1]/max)*ih;return `<circle cx="${xx}" cy="${yy}" r="3.5" fill="#fff" stroke="#0878f9" stroke-width="2"><title>${cpEscape(x[0])}: ${x[1]}</title></circle>`}).join('')}${labels}</svg>`;
+  }
+  function cpRenderMap(rows){
+    const root=$('#cpCollectMap');if(!root)return;
+    const points=rows.map(r=>({record:r,coords:cpGetGps(r)})).filter(x=>x.coords);
+    $('#cpMapPointCount').textContent=`${points.length} ${points.length===1?'point':'points'}`;
+    if(!window.L){root.innerHTML='<div class="cp-map-empty">Bibliothèque cartographique indisponible. Vérifiez la connexion Internet.</div>';return;}
+    if(!cpMapInstance){root.innerHTML='';cpMapInstance=L.map(root,{zoomControl:true}).setView([-4.5,23.5],4);L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(cpMapInstance);}
+    cpMapMarkers.forEach(m=>cpMapInstance.removeLayer(m));cpMapMarkers=[];
+    points.forEach(({record,coords})=>{const title=record.short_title||record.form_title||'Collecte',ref=findPrimaryValue(record),place=[record.data?.province,record.data?.zone_sante].filter(Boolean).join(' · ')||'Localisation';const marker=L.circleMarker(coords,{radius:7,fillColor:'#0799a8',color:'#fff',weight:2,fillOpacity:.95}).addTo(cpMapInstance);marker.bindPopup(`<strong>${cpEscape(title)}</strong><br>${cpEscape(ref)}<br>${cpEscape(place)}<br>${cpEscape(friendlyDate(record.submitted_at))}`);cpMapMarkers.push(marker);});
+    if(points.length){const bounds=L.latLngBounds(points.map(p=>p.coords));cpMapInstance.fitBounds(bounds,{padding:[22,22],maxZoom:12});}else cpMapInstance.setView([-4.5,23.5],4);
+    setTimeout(()=>cpMapInstance.invalidateSize(),100);
+  }
+  function cpRenderRecent(rows){
+    const root=$('#cpRecentList');if(!root)return;
+    if(!rows.length){root.innerHTML='<div class="cp-empty-mini">Aucune soumission reçue.<br>Les dernières réponses seront listées ici.</div>';return;}
+    root.innerHTML=rows.slice().sort((a,b)=>(b.submitted_at||'').localeCompare(a.submitted_at||'')).slice(0,6).map(r=>`<div class="cp-recent-row"><span class="cp-recent-icon">▤</span><div><strong>${cpEscape(r.short_title||r.form_title||'Enquête')}</strong><small>${cpEscape([r.data?.province,r.data?.zone_sante].filter(Boolean).join(' · ')||findPrimaryValue(r))} · ${cpEscape(friendlyDate(r.submitted_at))}</small></div><span class="cp-recent-state">✓</span></div>`).join('');
+  }
+  function cpRenderDistribution(rows){
+    const root=$('#cpDistribution');if(!root)return;
+    const counts=new Map();rows.forEach(r=>{const name=r.short_title||r.form_title||'Enquête';counts.set(name,(counts.get(name)||0)+1);});const arr=[...counts.entries()].sort((a,b)=>b[1]-a[1]).slice(0,6),total=rows.length;
+    if(!arr.length){root.innerHTML='<div class="cp-empty-mini">Aucune donnée à répartir.<br>Le graphique sera alimenté automatiquement.</div>';return;}
+    let offset=0;const segments=arr.map((x,i)=>{const val=x[1]/total*100,start=offset;offset+=val;return `${cpColors[i%cpColors.length]} ${start}% ${offset}%`;}).join(',');
+    root.innerHTML=`<div class="cp-donut-wrap"><svg class="cp-donut" viewBox="0 0 100 100"><circle cx="50" cy="50" r="34" fill="none" stroke="#edf2fa" stroke-width="20"/><circle cx="50" cy="50" r="34" fill="none" stroke="transparent" stroke-width="20"/><foreignObject x="0" y="0" width="100" height="100"><div xmlns="http://www.w3.org/1999/xhtml" style="height:100%;display:grid;place-items:center"><div style="width:76px;height:76px;border-radius:50%;background:conic-gradient(${segments});display:grid;place-items:center"><div style="width:52px;height:52px;background:white;border-radius:50%;display:grid;place-items:center;color:#10234a;font-size:12px;font-weight:800">${total}</div></div></div></foreignObject></svg><div class="cp-donut-legend">${arr.map((x,i)=>`<div class="cp-donut-line"><i style="background:${cpColors[i%cpColors.length]}"></i><span title="${cpEscape(x[0])}">${cpEscape(x[0])}</span><strong>${Math.round(x[1]/total*100)}% (${x[1]})</strong></div>`).join('')}</div></div>`;
+  }
+  function cpRenderQuality(rows){
+    const root=$('#cpQuality');if(!root)return;const gps=rows.filter(r=>cpGetGps(r)).length,rate=rows.length?Math.round(gps/rows.length*100):0;
+    root.innerHTML=`<div class="cp-quality-ring" style="--quality:${rate*3.6}deg"><div>${rate}%<small>Avec GPS</small></div></div><div class="cp-quality-note">${gps} soumission(s) géolocalisée(s) sur ${rows.length}<br>${rows.length?'La couverture GPS est calculée à partir des réponses.':'La qualité s’affichera dès la collecte.'}</div>`;
+  }
+  function renderDashboard(data){
+    cpPopulateFilters();const rows=cpFilteredRows();const forms=state.forms||[];const gps=rows.filter(r=>cpGetGps(r)).length;const provinces=new Set(rows.map(r=>r.data?.province).filter(Boolean));
+    $('#cpKpiForms').textContent=forms.length;$('#cpKpiFormsNote').textContent=`${forms.length} enquête(s) dans votre espace`;
+    $('#cpKpiSubmissions').textContent=rows.length.toLocaleString('fr-FR');$('#cpKpiSubmissionsNote').textContent='Réponses sur la période sélectionnée';
+    $('#cpKpiGps').textContent=gps.toLocaleString('fr-FR');$('#cpKpiGpsNote').textContent=`${rows.length?Math.round(gps/rows.length*100):0}% des soumissions`;
+    $('#cpKpiProvinces').textContent=provinces.size;$('#cpKpiProvincesNote').textContent='Provinces identifiées dans les réponses';
+    $('#cpKpiQueue').textContent=queueItems().length;
+    cpRenderTrend(rows);cpRenderMap(rows);cpRenderRecent(rows);cpRenderDistribution(rows);cpRenderQuality(rows);updateQueueIndicators();
+  }
+  function bindDashboardFilters(){
+    ['cpPeriodFilter','cpProvinceFilter','cpFormFilter','cpTrendGranularity'].forEach(id=>{const el=$('#'+id);if(el)el.addEventListener('change',()=>renderDashboard(state.dashboard||{}));});
+    $('#cpRefreshDashboard')?.addEventListener('click',()=>{loadDashboard();loadSubmissions();});
+    $('#cpMapReset')?.addEventListener('click',()=>{if(cpMapInstance)cpMapInstance.setView([-4.5,23.5],4);});
+  }
   function renderStatusChart(statuses) {
     const configs = [
       {key:'Ouvert',label:'Ouverts',cls:'fill-open'},
@@ -320,13 +328,21 @@ async function loadSubmissions() {
       <article class="survey-card">
         <div class="survey-card-top"><div class="survey-card-icon">▤</div><span class="survey-status">DISPONIBLE</span></div>
         <h3>${escapeHtml(form.title)}</h3><p>${escapeHtml(form.description || 'Formulaire prêt à être utilisé pour la collecte de données.')}</p>
-        <div class="survey-card-bottom"><span class="survey-meta">${countQuestions(form)} questions · ${form.is_system ? 'Modèle intégré' : 'Personnalisé'}</span><div class="survey-actions"><button class="mini-action" data-preview-form="${form.id}">Aperçu</button><button class="mini-action" data-share-form="${form.id}">Partager</button><button class="mini-action primary-mini" data-start-form="${form.id}">Lancer</button>${form.is_system ? '' : `<button class="mini-action delete-mini" data-delete-form="${form.id}" title="Supprimer">×</button>`}</div></div>
+        <div class="survey-card-bottom"><span class="survey-meta">${countQuestions(form)} questions · ${form.is_system ? 'Modèle intégré' : 'Personnalisé'}</span><div class="survey-actions"><button class="mini-action" data-preview-form="${form.id}">Aperçu</button><button class="mini-action primary-mini" data-start-form="${form.id}">Lancer</button><button class="mini-action share-mini" data-share-form="${form.id}">↗ Partager</button>${form.is_system ? '' : `<button class="mini-action delete-mini" data-delete-form="${form.id}" title="Supprimer">×</button>`}</div></div>
       </article>`).join('');
     $('#formsEmpty').classList.toggle('hidden', forms.length > 0);
     $$('[data-start-form]').forEach(btn => btn.addEventListener('click', () => { state.selectedFormId = Number(btn.dataset.startForm); navigate('collect'); renderCollectPicker(); renderCollectForm(state.selectedFormId); }));
     $$('[data-preview-form]').forEach(btn => btn.addEventListener('click', () => previewForm(Number(btn.dataset.previewForm))));
-    $$('[data-share-form]').forEach(btn => btn.addEventListener('click', async () => { $('#shareFormSelect').value=btn.dataset.shareForm; navigate('sharing'); await createShareLink(Number(btn.dataset.shareForm)); }));
     $$('[data-delete-form]').forEach(btn => btn.addEventListener('click', () => deleteForm(Number(btn.dataset.deleteForm))));
+    $$('[data-share-form]').forEach(btn => btn.addEventListener('click', async () => {
+      const id=Number(btn.dataset.shareForm);btn.disabled=true;btn.textContent='Création…';
+      try{const result=await api(`/api/forms/${id}/share`,{method:'POST'});const url=result.url;
+        try{await navigator.clipboard.writeText(url);toast('Lien public créé et copié','success',url);}catch{window.prompt('Copiez le lien public du formulaire :',url);}
+        const qr=`https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(url)}`;
+        const popup=window.open(qr,'_blank','noopener');if(!popup)toast('Lien prêt. Autorisez les popups pour ouvrir le QR code.','info');
+      }catch(error){toast('Impossible de créer le lien public','error',error.message||'Réessayez.');}
+      finally{btn.disabled=false;btn.textContent='↗ Partager';}
+    }));
   }
   function countQuestions(form) { return (form.sections || []).reduce((sum, section) => sum + (section.questions || []).length, 0); }
   $('#formSearch').addEventListener('input', renderForms);
@@ -354,7 +370,7 @@ async function loadSubmissions() {
     const name = escapeHtml(q.name);
     if (type === 'note') {
       control = `<div class="question-hint">${escapeHtml(q.label)}</div>`;
-      return `<div class="question-field full-width" data-question="${name}" data-relevant="${escapeHtml(q.relevant || '')}" data-required="${q.required ? 'true' : 'false'}">${control}${hint}</div>`;
+      return `<div class="question-field full-width" data-question="${name}">${control}${hint}</div>`;
     }
     if (type === 'select' || type === 'select_one') {
       control = `<select class="question-control" name="${name}"${required}><option value="">Sélectionner…</option>${(q.options || []).map(option => `<option value="${escapeHtml(option)}">${escapeHtml(option)}</option>`).join('')}</select>`;
@@ -367,52 +383,8 @@ async function loadSubmissions() {
       const placeholder = q.placeholder ? ` placeholder="${escapeHtml(q.placeholder)}"` : '';
       control = type === 'textarea' ? `<textarea class="question-control" name="${name}" rows="3"${required}${placeholder}></textarea>` : `<input class="question-control" type="${actualType}" name="${name}"${type === 'number' ? ' step="any"' : ''}${required}${placeholder}>`;
     }
-    return `<div class="question-field ${full ? 'full-width' : ''}" data-question="${name}" data-relevant="${escapeHtml(q.relevant || '')}" data-required="${q.required ? 'true' : 'false'}"><label class="question-label" for="q-${name}">${escapeHtml(q.label)}${star}</label>${control}${hint}</div>`;
+    return `<div class="question-field ${full ? 'full-width' : ''}"><label class="question-label" for="q-${name}">${escapeHtml(q.label)}${star}</label>${control}${hint}</div>`;
   }
-  function evaluateRelevant(expression, root) {
-    const expr=String(expression||'').trim(); if(!expr)return true;
-    const clauses=expr.replace(/^\(|\)$/g,'').split(/\s+(and|or)\s+/i);
-    let result=null, operator='and';
-    for(const part of clauses){
-      if(/^(and|or)$/i.test(part)){operator=part.toLowerCase();continue;}
-      let condition=part.trim().replace(/^\(|\)$/g,'');
-      let match=condition.match(/^not\s*\(\s*selected\s*\(\s*\$\{([^}]+)\}\s*,\s*['"]([^'"]+)['"]\s*\)\s*\)$/i);
-      let value=false;
-      if(match){const field=match[1],choice=match[2],vals=[...root.querySelectorAll(`[name="${CSS.escape(field)}"]:checked`)].map(x=>x.value);value=!vals.includes(choice);}
-      else {
-        match=condition.match(/^selected\s*\(\s*\$\{([^}]+)\}\s*,\s*['"]([^'"]+)['"]\s*\)$/i);
-        if(match){const vals=[...root.querySelectorAll(`[name="${CSS.escape(match[1])}"]:checked`)].map(x=>x.value);value=vals.includes(match[2]);}
-        else {
-          match=condition.match(/^\$\{([^}]+)\}\s*(=|==|!=|>=|<=|>|<)\s*['"]?([^'"]*)['"]?$/);
-          if(match){const target=root.querySelector(`[name="${CSS.escape(match[1])}"]`),actual=target?.value||'',expected=match[3];let left=actual,right=expected;
-            if(['>','<','>=','<='].includes(match[2])){left=Number(actual);right=Number(expected);}
-            switch(match[2]){case '=':case '==':value=String(left)===String(right);break;case '!=':value=String(left)!==String(right);break;case '>':value=left>right;break;case '<':value=left<right;break;case '>=':value=left>=right;break;case '<=':value=left<=right;break;}
-          } else { return true; }
-        }
-      }
-      result=result===null?value:(operator==='and'?result&&value:result||value);
-    }
-    return result===null?true:!!result;
-  }
-
-  function applyCollectRelevant(formRoot) {
-    $$('[data-relevant]',formRoot).forEach(node=>{
-      const expr=(node.dataset.relevant||'').trim(); if(!expr){node.style.display='';return;}
-      const show=evaluateRelevant(expr,formRoot);
-      node.style.display=show?'':'none';
-      const isCheckboxGroup=node.querySelectorAll('input[type="checkbox"]').length>0;
-      node.querySelectorAll('input,select,textarea').forEach(el=>{
-        el.required=show&&node.dataset.required==='true'&&(!isCheckboxGroup||el.classList.contains('multi-required-proxy'));
-        if(!show){if(el.type==='checkbox')el.checked=false;else el.value='';if(el.classList.contains('multi-required-proxy'))el.setCustomValidity('');}
-        else if(el.classList.contains('multi-required-proxy')){
-          const groupName=el.name.replace('__required','');
-          const checked=formRoot.querySelectorAll(`input[name="${CSS.escape(groupName)}"]:checked`).length>0;
-          el.setCustomValidity(checked?'':'Sélectionnez au moins une réponse.');
-        }
-      });
-    });
-  }
-
   function renderCollectForm(formId) {
     const form = state.forms.find(f => f.id === formId);
     if (!form) { $('#collectMain').innerHTML = '<div class="empty-collect panel"><h3>Enquête introuvable</h3><p>Actualisez la page ou choisissez une autre enquête.</p></div>'; return; }
@@ -424,10 +396,9 @@ async function loadSubmissions() {
     const surveyForm = $('#activeSurveyForm');
     $$('.question-field input, .question-field select, .question-field textarea', surveyForm).forEach(input => {
       if (input.type === 'date' && input.name === 'date_declaration' && !input.value) input.value = new Date().toISOString().slice(0,10);
-      input.addEventListener('input', () => { applyCollectRelevant(surveyForm); updateFormProgress(); });
-      input.addEventListener('change', () => { applyCollectRelevant(surveyForm); updateFormProgress(); });
+      input.addEventListener('input', updateFormProgress);
+      input.addEventListener('change', updateFormProgress);
     });
-    applyCollectRelevant(surveyForm);
     $$('.multi-required-proxy', surveyForm).forEach(proxy => {
       proxy.addEventListener('invalid', e => e.preventDefault());
       const groupName = proxy.name.replace('__required','');
@@ -641,7 +612,6 @@ async function loadSubmissions() {
       <div class="builder-question-grid"><label>Libellé de la question *<input data-q-field="label" data-q-index="${i}" value="${escapeHtml(q.label)}" placeholder="Ex. Quel est votre âge ?"></label><label>Type de réponse<select data-q-field="type" data-q-index="${i}">${[['text','Texte court'],['textarea','Texte long'],['number','Nombre'],['date','Date'],['time','Heure'],['select','Liste à choix unique'],['multiselect','Choix multiples'],['email','E-mail'],['phone','Téléphone']].map(([v,l])=>`<option value="${v}" ${q.type===v?'selected':''}>${l}</option>`).join('')}</select></label></div>
       ${['select','multiselect'].includes(q.type) ? `<div class="builder-option-row"><label>Options de réponse (séparées par des virgules)<input data-q-field="options" data-q-index="${i}" value="${escapeHtml(q.options || '')}" placeholder="Oui, Non, Ne sait pas"></label></div>` : ''}
       <div style="margin-top:11px"><label class="builder-required"><input type="checkbox" data-q-field="required" data-q-index="${i}" ${q.required?'checked':''}> Réponse obligatoire</label></div>
-      <div class="builder-option-row"><label>Condition d’affichage (facultatif, syntaxe XLSForm)<input data-q-field="relevant" data-q-index="${i}" value="${escapeHtml(q.relevant||'')}" placeholder="${'${question_precedente} = \'Oui\''}"></label></div>
     </div>`).join('');
     $$('[data-q-field]', $('#builderQuestions')).forEach(input => {
       input.addEventListener('input', () => updateBuilderQuestion(input));
@@ -679,8 +649,6 @@ async function loadSubmissions() {
       if (!q.label.trim()) { toast(`Le libellé de la question ${i+1} est obligatoire`, 'error'); return; }
       const name = slugify(q.name || q.label) || `question_${i+1}`;
       const question = {name, label:q.label.trim(), type:q.type, required:!!q.required};
-      if(String(q.relevant||'').trim()) question.relevant=String(q.relevant).trim();
-      if(String(q.relevant||'').trim()) question.relevant=String(q.relevant).trim();
       if (['select','multiselect'].includes(q.type)) {
         question.options = String(q.options || '').split(',').map(x => x.trim()).filter(Boolean);
         if (!question.options.length) { toast(`Ajoutez les choix de la question ${i+1}`, 'error'); return; }
@@ -746,63 +714,16 @@ async function loadSubmissions() {
     updateQueueIndicators();
   }
 
-  async function createShareLink(formId) {
-    try {
-      const result=await api(`/api/forms/${formId}/share`,{method:'POST'});
-      const idx=state.forms.findIndex(f=>Number(f.id)===Number(formId));
-      if(idx>=0){state.forms[idx].public_enabled=true;state.forms[idx].share_token=result.token;writeLS(LS.forms,state.forms);renderForms();}
-      const configuredRaw=String(readLS(LS.settings,{}).apiBase||window.location.origin).trim(); const configuredBase=configuredRaw.endsWith('/')?configuredRaw.slice(0,-1):configuredRaw;
-      const url=`${configuredBase}/public/${result.token}`;
-      $('#shareUrl').value=url; $('#shareResult').classList.remove('hidden');
-      $('#shareStatus').textContent='Lien actif : toute personne disposant de ce lien peut répondre sans compte.';
-      $('#shareQr').innerHTML='';
-      if(window.QRCode) new QRCode($('#shareQr'),{text:url,width:150,height:150,colorDark:'#102d4d',colorLight:'#ffffff',correctLevel:QRCode.CorrectLevel.H});
-      else $('#shareQr').innerHTML=`<img alt="QR code du formulaire public" width="150" height="150" src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(url)}">`;
-      renderSharingForms(); toast('Lien public créé','success','Vous pouvez copier le lien ou partager le QR code.');
-    } catch(e){toast('Impossible de créer le lien public','error',e.message);}
-  }
-
-  async function renderSharingForms() {
-    const host=$('#sharingFormsList'); if(!host) return;
-    if(!state.forms.length){host.innerHTML='<p class="empty-cell">Aucune enquête disponible.</p>';return;}
-    host.innerHTML=state.forms.map(form=>`<div class="sharing-row"><div><strong>${escapeHtml(form.short_title||form.title)}</strong><small>${form.public_enabled?'Lien public activé':'Lien non publié'}</small></div><button class="button ${form.public_enabled?'button-secondary':'button-primary'}" data-share-action="${form.id}">${form.public_enabled?'Voir / renouveler':'Partager'}</button></div>`).join('');
-    host.querySelectorAll('[data-share-action]').forEach(btn=>btn.addEventListener('click',()=>createShareLink(Number(btn.dataset.shareAction))));
-  }
-
-  async function loadFullMap() {
-    try{
-      const period=$('#mapPeriodFilter')?.value||'30', form=$('#mapFormFilter')?.value||'all';
-      const params=new URLSearchParams({period,province:'all'}); if(form!=='all')params.set('form_id',form);
-      const data=await api(`/api/dashboard?${params.toString()}`);
-      renderMapPoints(data.points||[],true);
-    }catch(e){$('#fullMapSummary').textContent='Impossible de charger les positions : '+e.message;}
-  }
-
-    async function init() {
+  async function init() {
     applySettings();
     bindNavigation();
+    bindDashboardFilters();
     setConnectionStatus();
     updateQueueIndicators();
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('/service-worker.js').catch(() => {});
     state.forms = readLS(LS.forms, []);
     state.submissions = readLS(LS.submissions, []);
     if (state.forms.length) { renderForms(); renderCollectPicker(); }
-    $('#dashboardRefresh')?.addEventListener('click',loadDashboard);
-    $('#dashboardPeriod')?.addEventListener('change',loadDashboard);
-    $('#dashboardForm')?.addEventListener('change',loadDashboard);
-    $('#dashboardProvince')?.addEventListener('change',loadDashboard);
-    $('#mapRefreshButton')?.addEventListener('click',loadFullMap);
-    $('#mapFormFilter')?.addEventListener('change',loadFullMap);
-    $('#mapPeriodFilter')?.addEventListener('change',loadFullMap);
-    $('#createShareButton')?.addEventListener('click',()=>createShareLink(Number($('#shareFormSelect').value)));
-    $('#copyShareButton')?.addEventListener('click',async()=>{try{await navigator.clipboard.writeText($('#shareUrl').value);toast('Lien copié','success');}catch{ $('#shareUrl').select();document.execCommand('copy');toast('Lien copié','success');}});
-    $('#downloadQrButton')?.addEventListener('click',()=>{
-      const canvas=$('#shareQr canvas'), img=$('#shareQr img');
-      const href=canvas?canvas.toDataURL('image/png'):img?.src;
-      if(!href){toast('QR code non disponible','error');return;}
-      const link=document.createElement('a');link.href=href;link.download='CollectPlus-QR.png';link.click();
-    });
-    $('#disableShareButton')?.addEventListener('click',async()=>{const id=Number($('#shareFormSelect').value);try{await api(`/api/forms/${id}/share?enabled=false`,{method:'PUT'});$('#shareStatus').textContent='Lien désactivé : les nouvelles soumissions sont bloquées.';toast('Lien public désactivé','success');await loadForms();renderSharingForms();}catch(e){toast('Erreur de désactivation','error',e.message);}});
     await refreshAll();
     renderReportSummary();
   }

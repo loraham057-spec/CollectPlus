@@ -1,139 +1,60 @@
-# CollectPlus v0.5.0 — Collecte, analyse et partage public
+# CollectPlus v0.6.0 — Refonte dashboard
 
-CollectPlus est une plateforme web/mobile de collecte de données de terrain inspirée des usages Kobo/ODK. La version 0.5.0 apporte un dashboard filtrable, une cartographie GPS OpenStreetMap des soumissions, des liens publics de formulaires sans compte participant, une validation de champs obligatoires côté serveur, un QR code de partage et un import CSV supplémentaire. Le socle existant (création de formulaires, import XLSForm/JSON, collecte hors ligne, synchronisation SQLite, exports) est conservé.
+CollectPlus est une application web de création, collecte et analyse de formulaires de terrain (FastAPI + SQLite + interface web/PWA + wrapper Android Capacitor).
 
-## Démarrage sous Windows
+## Changements de cette livraison
 
-1. Installez Python 3.11 ou une version ultérieure depuis [python.org](https://www.python.org/downloads/). Pendant l’installation, activez **Add Python to PATH**.
-2. Décompressez le dossier `CollectPlus_MVP.zip` dans un dossier où vous avez le droit d’écrire.
-3. Double-cliquez sur `run_windows.bat`. Au premier lancement, le script crée un environnement virtuel et installe les dépendances Python. Une connexion Internet est nécessaire pour cette installation initiale.
-4. Le navigateur s’ouvrira sur **http://127.0.0.1:8000**. Gardez la fenêtre de terminal ouverte tant que vous utilisez l’application.
+- Refonte de la page d'accueil/dashboard en reprenant la composition visuelle de la référence : KPI, filtres période/province/formulaire, courbe de tendance, carte de collecte, dernières soumissions, distribution et qualité GPS, panneau d'aide au partage.
+- Les valeurs du dashboard sont issues des soumissions réellement enregistrées ; aucune statistique fictive n'est injectée.
+- Carte Leaflet/OpenStreetMap qui place les soumissions possédant des coordonnées GPS. Les données de GPS sont recherchées dans les champs latitude/longitude et dans des formats de localisation courants.
+- Responsive ordinateur/tablette/mobile, thème bleu nuit, bleu clair et turquoise.
+- **Aucun questionnaire d'enquête n'est préchargé** dans une nouvelle installation : la bibliothèque est vide, et l'utilisateur doit créer ou importer ses formulaires.
+- Migration de l'ancien formulaire système MAPEPI : si aucune soumission n'existe, l'ancien modèle système est supprimé ; s'il possède des réponses, il est conservé comme formulaire non système pour ne pas perdre les données.
+- Suppression de la suppression cascade des soumissions lors de la suppression d'un formulaire : un formulaire ayant des réponses renvoie un message de conflit et ses données sont préservées.
+- Partage public par lien tokenisé : le participant ouvre le lien sans compte et soumet sa réponse. Le créateur peut générer un lien depuis la carte de formulaire ; l’interface copie le lien et ouvre le QR via un service QR externe.
+- Révocation des liens publics depuis l’API de gestion.
+- Cache PWA versionné pour renouveler les ressources du design.
 
-Les données synchronisées sont enregistrées dans `data/collectplus.db`. Ne supprimez pas ce fichier si vous voulez conserver les données collectées.
+## Lancement Windows
 
-## Démarrage avec Docker
+1. Installer Python 3.11+.
+2. Décompresser cette archive.
+3. Double-cliquer `run_windows.bat`.
+4. Le script crée `.venv`, installe `requirements.txt`, lance FastAPI et ouvre le navigateur.
+5. URL : http://127.0.0.1:8000
 
-Installez Docker Desktop, ouvrez un terminal dans le dossier et exécutez :
+La première installation de dépendances requiert Internet. Garder la console ouverte pour maintenir le serveur.
+
+## Lancement manuel
+
+```cmd
+py -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+## Lancement Docker / Render
+
+Le `Dockerfile` expose le port 8000. Pour Docker local :
 
 ```bash
 docker compose up --build
 ```
 
-Puis ouvrez http://127.0.0.1:8000. Le volume `./data` conserve la base quand le conteneur est recréé.
+Pour Render, utiliser le Dockerfile existant et un disque persistant monté pour la base SQLite, avec `COLLECTPLUS_DB` pointant vers un chemin sur ce disque. Ne remplacez pas ou ne supprimez pas la base en place sans sauvegarde préalable.
 
-## Utilisation sur téléphone
+## Carte et dépendances web externes
 
-- L’interface est responsive et s’utilise dans le navigateur mobile.
-- Pour tester depuis un téléphone sur le même réseau Wi-Fi que l’ordinateur, lancez `run_network_windows.bat`, trouvez l’adresse IP locale de l’ordinateur (`ipconfig` sous Windows), puis ouvrez `http://ADRESSE-IP:8000` sur le téléphone.
-- L’accès depuis une autre machine ne fonctionne que tant que le serveur reste démarré et que le pare-feu autorise la connexion.
-- La prise en charge PWA (mise sur l’écran d’accueil et cache de la coque de l’application) nécessite un navigateur compatible. Le service worker est généralement disponible sur `localhost` ou en HTTPS. Pour une installation publique, configurez un nom de domaine et HTTPS.
-- Les réponses saisies quand le serveur est indisponible sont gardées dans le stockage local du navigateur et peuvent être renvoyées lorsque le serveur redevient joignable. Évitez d’effacer les données du navigateur avant synchronisation.
+La carte s'appuie sur Leaflet 1.9.4 et les tuiles OpenStreetMap via CDN. La cartographie de fond nécessite une connexion Internet. Les marqueurs ne s'affichent que pour les soumissions avec coordonnées GPS reconnues. Le dashboard n'invente pas de points, formulaires ou soumissions.
 
+## Vérifications réalisées
 
+- Syntaxe Python compilée (`py_compile`).
+- Syntaxe JS vérifiée (`node --check`).
+- Initialisation DB testée : 0 formulaire au premier démarrage.
+- API dashboard testée sur une base de test vide : 0 soumission et listes vides.
 
-## Nouveautés de la version 0.5.0
+## Limites et sécurité
 
-- Dashboard filtrable par période, enquête et province; indicateurs actualisés depuis l’API.
-- Graphique de tendance des soumissions journalières.
-- Cartographie des coordonnées GPS réellement présentes dans les payloads (formats `gps`, `geopoint`, `location`, latitude/longitude). La carte utilise les tuiles OpenStreetMap et nécessite une connexion Internet pour les fonds de carte.
-- Vue cartographique séparée et marqueurs cliquables.
-- Publication d’un lien public tokenisé depuis la section **Partage public** ou depuis le bouton **Partager** d’une carte d’enquête.
-- Le participant peut ouvrir le lien, répondre sans compte et envoyer la soumission; la géolocalisation est opt-in via le bouton GPS.
-- L’administrateur peut désactiver le lien public. La validation des questions obligatoires est effectuée côté serveur.
-- Import CSV de questionnaire avec colonnes `name,label,type,required,options,relevant` (options séparées par `|`, `;` ou `,`).
-- Éditeur de formulaire et import XLSForm : prise en charge de conditions `relevant` simples (`=`, `!=`, comparaisons numériques, `selected()` avec AND/OR).
-- Cache PWA versionné, mise à jour du thème, CORS configurable par variable `COLLECTPLUS_CORS_ORIGINS`, limitation de la taille des fichiers importés à 10 Mo.
-
-### Sécurité et limites à connaître
-
-Cette version est une version améliorée de test, pas encore une installation production prête pour des données de santé sensibles. Les endpoints d’administration et de gestion des formulaires ne sont pas encore protégés par une authentification et des rôles; le partage public n’a pas encore de limitation de débit, CAPTCHA ni journal d’audit. Déployer derrière HTTPS, sauvegarder la base SQLite, restreindre l’accès d’administration et éviter les données sensibles avant la mise en place de ces protections. Les conditions XLSForm complexes (calculs, repeat groups, expressions XPath avancées, contraintes complètes) nécessitent encore un moteur de formulaire plus complet.
-
-## Fonctionnalités incluses
-
-- Tableau de bord avec compteurs et graphiques, alimentés uniquement par les soumissions réelles.
-- Formulaire « Fiche d’enregistrement et de suivi d’incident » adapté du document MAPEPI transmis : identification, étape du circuit, motifs, maladie/échantillon, impact/traçabilité, notification, mesures immédiates et correctives, clôture.
-- Création simple d’enquêtes avec questions texte, texte long, nombre, date, heure, liste à choix unique, choix multiples, e-mail et téléphone.
-- Importation `.json` CollectPlus et `.xlsx` XLSForm (feuilles `survey`, `choices` et, facultativement, `settings`). Les règles de pertinence, calculs, répétitions, médias et autres fonctions XLSForm avancées ne sont pas toutes exécutées : contrôlez chaque formulaire importé avant la collecte.
-- Export CSV compatible avec Excel, classeur XLSX, archive JSON et impression du tableau de bord vers PDF via le navigateur.
-- Personnalisation locale du nom et de la couleur de l’interface.
-
-## Limites importantes de cette version
-
-Cette livraison est un **MVP local prêt à lancer**, avec un workflow GitHub Actions permettant de compiler automatiquement un APK Android de test. L'APK n'est pas précompilé dans l'archive : il est produit par GitHub Actions après publication du code et lancement du workflow. Elle n’intègre pas encore les comptes utilisateurs, les rôles, les permissions multi-organisation, le chiffrement de bout en bout, le contrôle d’accès côté serveur, ni une infrastructure de sauvegardes automatisées. Les préférences visuelles sont stockées dans le navigateur. La synchronisation hors ligne utilise `localStorage` et non une base mobile chiffrée.
-
-**Ne publiez pas ce serveur directement sur Internet et n’y entrez pas de données personnelles ou médicales identifiantes en production avant d’ajouter une authentification forte, des droits d’accès, HTTPS, des sauvegardes testées et les protections de confidentialité requises.** Utilisez d’abord les données de test.
-
-## API utile
-
-- `GET /api/health` — état du serveur.
-- `GET /api/forms` — formulaires disponibles.
-- `POST /api/forms` — créer un formulaire (JSON).
-- `POST /api/forms/import` — importer XLSForm/JSON.
-- `POST /api/submissions` — enregistrer une soumission.
-- `GET /api/submissions` — consulter les soumissions.
-- `GET /api/dashboard` — agrégats pour le tableau de bord.
-- `GET /api/export/csv`, `/api/export/xlsx`, `/api/export/json` — exports.
-
-La documentation interactive de l’API est accessible sur **http://127.0.0.1:8000/docs** après démarrage.
-
-## Préparation Android (APK)
-
-Le dossier `android-wrapper/` contient le conteneur Capacitor. Le formulaire MAPEPI est inclus comme formulaire de démarrage afin que l'écran de collecte soit disponible même si le serveur n'est pas accessible au premier lancement. Les soumissions faites hors ligne restent stockées sur l'appareil et peuvent être synchronisées vers une API CollectPlus compatible après configuration de son adresse dans les paramètres.
-
-**Compiler un APK via GitHub Actions :**
-1. Publiez tout le contenu de ce dossier dans la branche `main` d'un dépôt GitHub.
-2. Ouvrez l'onglet **Actions** du dépôt.
-3. Choisissez **Build CollectPlus APK**, puis **Run workflow** sur la branche `main`.
-4. Une fois le workflow terminé avec une coche verte, ouvrez son exécution et téléchargez l'artefact **CollectPlus-Android-APK** dans la section **Artifacts**.
-5. Décompressez l'artefact pour récupérer `app-debug.apk`, puis transférez-le sur un téléphone Android de test.
-
-Le workflow se déclenche aussi automatiquement lorsqu'un changement pertinent est poussé dans `main`. L'APK généré est un APK debug de test, pas un paquet signé pour une publication de production. Pour la compilation locale avec Android Studio, voir `android-wrapper/README_ANDROID.md`.
-
-## Structure du projet
-
-```text
-CollectPlus_MVP/
-├── app/
-│   ├── main.py
-│   └── static/
-│       ├── index.html
-│       ├── styles.css
-│       ├── app.js
-│       ├── manifest.webmanifest
-│       ├── service-worker.js
-│       ├── default-forms.json
-│       └── icon.svg
-├── android-wrapper/
-│   ├── package.json
-│   ├── capacitor.config.ts
-│   └── build_android_windows.bat
-├── .github/workflows/
-│   ├── collectplus-ci.yml
-│   └── build-apk.yml
-├── data/
-├── run_windows.bat
-├── run_network_windows.bat
-├── run_linux_mac.sh
-├── Dockerfile
-├── docker-compose.yml
-├── requirements.txt
-└── sample_form.json
-```
-
-## Vérification automatique avec GitHub Actions
-
-Le fichier `.github/workflows/collectplus-ci.yml` vérifie automatiquement le projet à chaque push ou pull request vers `main` et peut être lancé manuellement depuis l'onglet **Actions**. Il installe les dépendances, vérifie la syntaxe, démarre brièvement le serveur pour contrôler les routes essentielles, puis construit l'image Docker.
-
-**Important :** ce workflow vérifie et construit le projet dans un environnement temporaire GitHub. Il ne publie pas l'application sur une adresse Internet permanente. Pour rendre CollectPlus accessible au public, il faut ensuite choisir et configurer un hébergeur compatible avec FastAPI et prévoir un stockage persistant pour la base de données.
-
-## Compiler l'APK automatiquement avec GitHub Actions
-
-Le workflow `.github/workflows/build-apk.yml` compile l'application Android et publie `app-debug.apk` comme artefact téléchargeable.
-
-1. Envoyez tout le contenu de ce dossier à la racine du dépôt GitHub (le dossier `.github/workflows/` doit également être présent).
-2. Ouvrez le dépôt GitHub, puis **Actions**.
-3. Sélectionnez **Build CollectPlus APK** dans la liste des workflows.
-4. Cliquez sur **Run workflow**, sélectionnez la branche `main`, puis confirmez avec **Run workflow**. Le workflow peut aussi démarrer automatiquement après un push sur `main` lorsque des fichiers concernés sont modifiés.
-5. Attendez que l'exécution soit terminée avec une coche verte. Ouvrez l'exécution, puis téléchargez l'artefact **CollectPlus-Android-APK** dans la section **Artifacts**. Décompressez l'archive téléchargée pour récupérer `app-debug.apk`.
-
-Cette compilation produit un APK **debug destiné aux tests**, non signé pour une distribution de production. Le paquet Android contient l'interface mobile ; l'API Python et sa base de données doivent toujours fonctionner sur un serveur accessible pour les fonctions de synchronisation.
+Cette livraison constitue un projet prêt à démarrer/tester, pas encore une plateforme certifiée de production pour des données de santé identifiantes. Avant l'ouverture publique, intégrer authentification administrateur, RBAC, audit, contrôle anti-abus des formulaires publics, politique de sauvegarde et TLS/HTTPS. La compatibilité XLSForm est partielle pour les fonctionnalités avancées.
